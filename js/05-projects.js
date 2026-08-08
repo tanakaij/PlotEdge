@@ -391,6 +391,7 @@ function useCurrentLocationForSite() {
 
 function renderProjectsList() {
   const el = document.getElementById('projectsList');
+  const label = document.getElementById('projectsListLabel');
   // Every other route onto #view-projects (renderProjectsScreen, refreshProjectsScreen, boot)
   // only lands here when projects.length === 0, so this is normally a true cold launch and the
   // welcome copy above already says everything that needs saying — no need for an extra empty-
@@ -401,9 +402,11 @@ function renderProjectsList() {
   if (!projects.length) {
     el.style.display = 'none';
     el.innerHTML = '';
+    if (label) label.style.display = 'none';
     return;
   }
   el.style.display = '';
+  if (label) label.style.display = '';
   el.innerHTML = projects.slice().reverse().map(p=>{
     const d = projectData[p.id] || {savedFeatures:[]};
     const nF = (d.savedFeatures||[]).length;
