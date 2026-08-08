@@ -1,0 +1,15 @@
+node_modules/
+package-lock.json
+
+# Generated at build time by `npx cap add android` — never committed, so the
+# Android project is always regenerated clean from capacitor.config.json.
+android/
+www/
+
+.DS_Store
+*.log
+
+# NOT ignored, deliberately: signing/plotedge-release.keystore
+# It must stay byte-identical between builds or Android refuses to update the
+# installed app and forces an uninstall, which deletes all captured survey data.
+# See BUILD_APK.md.
