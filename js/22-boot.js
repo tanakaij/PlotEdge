@@ -70,13 +70,32 @@ window.addEventListener('offline', updateNetworkGradientState);
   if (wm) wm.checked = getWatermarkPref();
 })();
 
-(function(){
-  const btn = document.getElementById('captureBtn');
-  btn.addEventListener('pointerdown', onCaptureBtnDown);
-  btn.addEventListener('pointerup', onCaptureBtnUp);
+// ══ WHY THE BUTTON CAPTURES THE POINTER ══
+// pointerup only reaches an element if the finger is still over it. `pointerleave` was wired to
+// cancel, so the extremely common field gesture — press, thumb rolls a few millimetres off the
+// edge, release — fired pointerleave and then delivered pointerup somewhere else entirely. The
+// press was cancelled and the release never arrived: no vertex, no toast, nothing. That is the
+// other half of "missing capture you have captured", and it gets worse with gloves, in the cold,
+// or one-handed.
+// setPointerCapture() redirects every later event for that finger back to the button, so a press
+// that starts on Capture always finishes on Capture. pointerleave then has no job to do and is
+// dropped; genuine interruptions still arrive as pointercancel.
+function bindCaptureButton(btn){
+  if (!btn) return;
+  btn.addEventListener('pointerdown', e => {
+    try { btn.setPointerCapture(e.pointerId); } catch(err) { /* not supported — plain events still work */ }
+    onCaptureBtnDown();
+  });
+  btn.addEventListener('pointerup', e => {
+    try { if (btn.hasPointerCapture && btn.hasPointerCapture(e.pointerId)) btn.releasePointerCapture(e.pointerId); } catch(err) {}
+    onCaptureBtnUp();
+  });
   btn.addEventListener('pointercancel', onCaptureBtnCancel);
-  btn.addEventListener('pointerleave', onCaptureBtnCancel);
-})();
+  // Right-click / long-press context menus interrupt a hold-to-average on some WebViews.
+  btn.addEventListener('contextmenu', e => e.preventDefault());
+}
+
+bindCaptureButton(document.getElementById('captureBtn'));
 
 // ══ FLOATING CAPTURE BUTTON ══
 // Forwards the exact same press/hold handlers as the real button (tap-to-capture, hold-to-average)
