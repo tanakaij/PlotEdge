@@ -1,0 +1,532 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   PlotEdge — Design tokens, @property, light/dark, the six pillars
+   ═══════════════════════════════════════════════════════════════════════════
+   Part of an ordered set: css/*.css are loaded in filename order by index.html.
+   Order matters — later files rely on the cascade from earlier ones, and the
+   design tokens in 01-tokens.css must load first. */
+
+  /* ══ SAFE AREA ══
+     Every inset in this file goes through these four variables rather than calling
+     env(safe-area-inset-*) directly, because neither source is trustworthy on its own:
+
+     - env() is correct on iOS and on Android WebView 140+, but WebView versions below
+       140 have a bug that reports the top inset as 0 in edge-to-edge mode. Plenty of
+       field devices are still on older WebViews.
+     - --sb-* is pushed in by MainActivity (see scripts/patch-android-ui.py), which reads
+       the real WindowInsets from Android. Always right on Android, absent everywhere else.
+
+     max() of the two means whichever source is present and correct wins, and on a plain
+     browser tab (neither present) both fall back to 0. */
+  /* Registering --mesh-i as a real <number> is what lets it TRANSITION. An unregistered custom
+     property is a plain token substitution, so the screen-intensity band would cut instantly
+     between tabs instead of easing. Engines without @property ignore this block and still get
+     the correct value, just without the fade. */
+  @property --mesh-i {
+    syntax: '<number>';
+    inherits: true;
+    initial-value: 0.8;
+  }
+
+  :root {
+    --sat: max(env(safe-area-inset-top),    var(--sb-top,    0px));
+    --sab: max(env(safe-area-inset-bottom), var(--sb-bottom, 0px));
+    --sal: max(env(safe-area-inset-left),   var(--sb-left,   0px));
+    --sar: max(env(safe-area-inset-right),  var(--sb-right,  0px));
+  }
+  :root {
+    /* ══ MODERN DARK SLATE / TACTICAL GIS ══
+       Slate-based neutrals (Tailwind slate 900/800/700 family) with a precision-emerald accent.
+       --accent-primary/--accent-hover keep their historical NAMES because ~200 rules across this file
+       reference them; only the values changed (emerald now). Renaming them would have meant
+       touching every one of those rules for zero visual gain. */
+    --bg-primary:      #0B0F19;
+    --input-bg:     #0F172A;
+    --card-bg: #1E293B;
+    --surface-sunken:#161F30;
+    --raised:  #243449;
+    --card-border:  #334155;
+    --accent-primary:  #10B981;
+    --accent-hover: #34D399;
+    --white:   #F8FAFC;
+    --text-primary:    #F8FAFC;
+    --text-secondary:   #94A3B8;
+    --text-tertiary:  #8496AD;
+    --success: #22C55E;
+    --danger:  #EF4444;
+    --warn:    #F59E0B;
+    /* On the dark slate surfaces these hues already clear the text-contrast threshold, so the
+       -ink text variants are simply the base colours. The light theme darkens them (see below). */
+    --success-ink: var(--success);
+    --warn-ink:    var(--warn);
+    --danger-ink:  var(--danger);
+    /* Accent as a bare RGB triplet. Previously the accent appeared as a hardcoded "225,20,90"
+       inside ~45 separate rgba() calls, because rgba() can't consume a hex custom property.
+       Centralising it here means the accent is now genuinely single-source: retinting the app
+       again is a one-line change instead of a find-and-replace across the stylesheet. */
+    --accent-rgb:      16,185,129;
+    --accent-rgb-deep: 5,150,105;
+    /* ══ SEMANTIC THEME TOKENS ══
+       Tokens are named by ROLE, not appearance: a component says what a colour is FOR
+       (--card-bg) rather than what it looks like (--slate-800). Every themed value is declared
+       exactly once here and once in the [data-theme="light"] block below; nothing else in the
+       stylesheet hardcodes a colour, so retinting or adding a third theme means editing only
+       these two blocks. --bg-elevated is the one addition to the brief: the raised page tone
+       sitting between --bg-primary and --card-bg, used by the frosted nav/header surfaces.
+       Note: this project has no Tailwind build step (it is a single self-contained HTML file
+       loading Leaflet/JSZip from CDN), so the `dark:` variant approach isn't available here —
+       the equivalent mechanism is the [data-theme="light"] attribute block further down. */
+    --bg-elevated:    var(--input-bg);  /* raised page tone: nav/header glass */
+    /* Docked nav geometry. --nav-h is the tab row; --dock-h adds the safe-area padding, i.e. the
+       total height the bar physically occupies. Everything that must clear the bar (page padding,
+       the capture FAB, map controls) derives from --dock-h rather than repeating the arithmetic,
+       so changing the bar height is a one-line edit. */
+    /* ══ GLASS/BLUR TOKENS ══
+       Every backdrop-filter in this file goes through one of these rather than a hardcoded blur
+       value, for one reason: html.native-android below can then neutralize ALL of them in a
+       single place. Backdrop-filter on a position:fixed/absolute element with content
+       scrolling/panning underneath it (nav bar, header, map toggle pills, modal overlay) is cheap
+       on desktop Chrome's compositor but forces a full re-blur every frame on Android WebView's —
+       that compositor cost is what actually caused the tearing/stutter/blank-flash/freezing
+       reported on the APK build, not present on web. Adding a NEW blurred surface later? Reuse
+       one of these tokens (or add a new --glass-N here AND to the html.native-android block
+       below) instead of hardcoding the filter value directly on the rule, or it silently
+       reintroduces the bug only on Android, where it's hardest to spot (see also the CI guard in
+       .github/workflows/build-apk.yml, which fails the build if it finds a hardcoded one). */
+    --glass-16: blur(16px) saturate(140%); /* pm-header, bottom-nav */
+    --glass-12: blur(12px);                /* map toggle pills/panel */
+    --glass-10: blur(10px) saturate(150%); /* vertex-map-toggle */
+    --glass-8:  blur(8px);                 /* digi-readout */
+    --glass-5:  blur(5px) saturate(110%);  /* modal-overlay */
+    --nav-h:  64px;
+    --dock-h: calc(64px + max(12px, var(--sab)));
+    /* Inactive tab colour. Kept as its own token rather than reusing --text-tertiary so the nav's
+       muted slate can be tuned independently of body text, and so the light/outdoor themes can
+       override it (a fixed #64748B is unreadable on the white and high-contrast surfaces). */
+    --nav-inactive: #64748B;
+    --input-inset: inset 0 1px 4px rgba(0,0,0,0.45), inset 0 -1px 0 rgba(255,255,255,0.03);
+    /* Bare RGB triplets for the remaining colours that get used inside rgba() tints. Same reason
+       as --accent-rgb: rgba() cannot consume a hex custom property, so any colour that needs a
+       translucent variant has to exist in this form too, otherwise the tint silently drifts out
+       of sync with its solid token the next time the palette is retinted. */
+    --warn-rgb:    245,158,11;
+    --danger-rgb:  239,68,68;
+    --success-rgb: 34,197,94;
+    --accent2-rgb: 14,165,233;
+    /* High-contrast "pop" surface for primary pill buttons / toast — inverts per theme so it
+       always reads as the strongest surface on the page (white-on-black in dark, dark-on-cream
+       in light) rather than literally meaning "white". */
+    --cta:      #F8FAFC;
+    --on-cta:   #0B0F19;
+    /* Text/icon color for content sitting on the orange accent (badges, capture button, chips).
+       The orange itself doesn't change between themes, so this pairing is fixed too. */
+    --on-accent: #052E22;
+    --on-danger: #FFFFFF;
+    --accent2:    #0EA5E9;
+    --on-accent2: #04222E;
+    /* Fourth KPI accent (Photos) — kept distinct from --warn/--danger so it carries no
+       warning/error connotation, just a clean fourth identity color alongside orange/success/accent2. */
+    --violet:     #A855F7;
+    --chip-info-bg:     rgba(59,130,246,0.14);
+    --chip-info-border: rgba(59,130,246,0.3);
+    --chip-info-text:   #8FBFFF;
+    /* Translucent nav-bar background — flips per theme so the bottom nav (and anything else
+       using a frosted dark bar in the dark theme) stays legible instead of forcing a dark bar
+       onto the light theme's dark text. */
+    --nav-bg:  rgba(15,23,42,0.86);
+    --r:       2px;
+    --rl:      16px;
+    --font:    'Inter', -apple-system, 'Segoe UI', system-ui, sans-serif;
+    --font-display: 'Space Grotesk', 'Inter', -apple-system, sans-serif;
+    --mono:    'Roboto Mono', 'SF Mono', 'Courier New', monospace;
+    /* Claymorphism tokens for filled buttons: a faint light-catch to the top-left, a soft dark
+       shadow to the bottom-right (bigger blur, low spread — the "puffy" part of clay), and a
+       thin inset top highlight for the bevel. :active swaps to the inset pair so the button
+       reads as pressed into the surface rather than lifted off it. */
+    /* Tactical GIS drops claymorphism: the puffy light-catch/soft-shadow pair read as "soft
+       consumer app" and fought the crisp instrument look. Buttons now carry a flat fill plus a
+       hairline outline, with a single tight shadow for press feedback only. */
+    --clay-shadow: 0 1px 2px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06);
+    --clay-shadow-active: inset 0 2px 4px rgba(0,0,0,0.45);
+    /* Shared shadow for "resting" cards/rows/tiles (feature cards, project rows, stat boxes, the
+       review map frame, etc). Previously each of these carried its own 4-layer stack (drop shadow
+       + ambient shadow + inset top highlight + inset bottom shade) — visually correct but a lot of
+       depth cues stacked on components that are mostly just static containers. Trimmed to two
+       layers: a soft outer shadow (mainly does the work in the light theme) plus a single inset
+       top highlight (the part that actually reads against dark mode's near-black --bg-primary — see the
+       longer note on .card below for why outer shadows alone go invisible there). Dropped the
+       extra inset *bottom* shade these all used to carry; that was the "puffy" clay layer, and
+       losing it is most of the visual-weight reduction. */
+    --card-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    /* ══ ADAPTIVE BACKGROUND GRADIENT ══
+       Deep desaturated base (dark) / luminous pastel base (light) + a two-tone diagonal wash that
+       is DIFFERENT PER SCREEN (see --grad-tint/--grad-tint2 overrides on #view-projects and each
+       #panel-* below) so screens read as distinct places, not one repeated flat color. Two more
+       layers are stacked on top, independent of the per-screen tint variables so they can't be
+       clobbered by them: --net-tint (offline, app-wide) and --gps-tint (fix quality, Collect only).
+       Both default to zero alpha (invisible) and are switched on by data-network/data-gps
+       attributes set from JS. All gradients, no images — cheap next to the map engine. */
+    --grad-1: #0B0F19;
+    --grad-2: #0F172A;
+    /* ══ LANDING CONTOUR TILE ══
+       One seamlessly-tiling 320px SVG, inline so it costs no request. Each contour is defined
+       once in <defs> and repeated with <use> at nine 320px offsets, which is what makes anything
+       crossing an edge reappear on the opposite one — without that the repeat shows a hard seam.
+       Coordinates are integers and only <, >, # and " are percent-escaped: running the whole
+       thing through encodeURIComponent escaped every space and bracket as well and made the tile
+       43x larger for no benefit. Used as a mask, so the colour comes from the accent, not from
+       the tile. */
+    --contour-tile: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='320' height='320'%3E%3Cdefs%3E%3Cpath id='c0' d='M121 104C121 106 119 108 118 110C117 112 116 113 114 115C113 116 111 117 109 117C108 118 105 117 103 117C102 116 100 115 99 115C98 115 97 116 96 117C95 118 93 120 91 121C90 122 87 123 85 123C83 122 82 120 82 118C81 116 83 113 83 112C83 110 83 109 82 108C82 106 80 106 79 104C78 102 76 100 76 99C75 97 76 95 77 93C78 91 79 90 81 89C82 87 83 86 85 85C87 84 89 83 90 83C92 84 95 85 96 87C97 89 98 93 99 94C99 96 99 98 99 98C100 98 102 97 104 96C106 95 110 94 113 94C116 94 119 96 120 97C122 99 122 102 121 104Z'/%3E%3Cpath id='c1' d='M139 104C138 107 134 111 131 113C128 116 125 117 122 119C120 121 118 123 117 125C115 127 114 129 112 131C110 133 107 135 104 135C102 136 99 136 96 136C93 136 90 136 87 136C85 136 81 136 78 134C76 133 73 132 71 129C69 127 68 123 68 120C67 118 67 115 67 112C66 109 65 107 63 104C62 101 59 98 59 94C58 90 58 86 59 83C61 80 64 77 68 76C71 74 76 75 79 75C83 75 86 76 88 76C91 76 94 76 96 76C98 76 101 77 103 77C105 78 107 79 110 80C112 81 115 81 118 82C121 83 126 83 129 85C133 87 137 89 139 93C140 96 141 101 139 104Z'/%3E%3Cpath id='c2' d='M152 104C152 109 149 114 147 118C144 122 140 125 137 128C134 131 131 133 128 136C125 139 123 143 120 146C117 150 114 154 110 156C106 158 101 160 96 159C91 159 87 156 83 154C79 152 75 148 72 146C68 143 65 141 61 139C58 136 53 134 50 130C47 127 45 122 43 118C42 114 41 109 41 104C41 99 41 94 42 89C43 85 44 79 46 75C48 71 52 67 57 65C61 62 67 62 72 62C76 61 81 63 85 63C89 64 92 63 96 63C100 62 104 59 108 58C113 57 119 56 123 57C128 57 133 60 137 63C141 66 144 71 146 75C148 79 150 84 151 89C153 94 153 99 152 104Z'/%3E%3Cpath id='c3' d='M163 104C163 110 163 116 162 122C161 128 160 134 157 139C155 145 151 150 146 154C142 159 136 162 131 165C126 168 120 171 114 173C109 175 102 177 96 177C90 177 83 176 77 174C71 172 66 168 61 164C56 160 52 156 48 152C43 148 38 145 33 140C28 136 23 131 20 124C17 118 15 111 15 104C16 97 19 90 22 84C26 78 31 74 36 69C40 65 45 61 49 57C54 54 58 50 63 47C68 44 74 42 79 41C85 39 90 38 96 37C102 37 108 35 114 35C121 35 129 34 135 36C142 38 149 41 154 46C159 50 163 58 165 64C166 71 166 79 165 85C165 92 164 98 163 104Z'/%3E%3Cpath id='c4' d='M270 236C270 238 268 239 266 240C265 241 262 241 260 242C259 242 258 242 257 243C257 244 257 246 257 248C256 249 256 252 255 253C253 254 251 255 250 254C249 254 247 252 246 251C245 250 244 248 243 248C242 247 241 247 240 246C239 246 237 245 236 244C235 243 234 242 233 241C233 239 233 238 232 236C232 234 231 233 231 231C231 229 231 227 232 225C232 224 234 222 236 222C238 222 241 223 243 224C245 225 247 228 248 228C249 229 249 229 250 228C251 228 252 225 253 224C255 223 257 221 259 221C261 220 263 221 264 222C266 223 267 224 268 226C269 227 270 229 270 231C271 232 271 234 270 236Z'/%3E%3Cpath id='c5' d='M280 236C280 239 280 241 279 244C278 246 277 249 276 251C275 253 273 255 271 257C269 259 267 260 265 262C263 264 261 266 258 267C256 269 253 270 250 270C247 270 244 269 242 267C239 266 237 263 236 261C234 259 232 258 230 256C228 255 224 254 222 252C219 251 216 248 214 246C212 243 211 239 212 236C212 233 214 230 216 227C218 224 220 222 222 220C225 218 227 216 229 215C231 214 234 212 236 212C238 211 241 212 243 211C246 211 248 211 250 211C252 210 255 208 258 207C261 206 265 204 269 204C272 204 276 205 278 208C281 210 282 214 283 217C283 220 282 224 282 228C281 231 281 233 280 236Z'/%3E%3Cpath id='c6' d='M295 236C294 240 294 244 294 248C293 252 294 257 293 261C292 265 290 270 287 273C284 276 279 278 275 280C271 282 267 282 262 283C258 283 254 284 250 284C246 284 241 284 237 284C233 283 229 281 225 279C221 277 218 274 214 272C211 269 208 265 205 262C202 258 199 255 197 250C195 246 193 241 194 236C194 231 196 226 199 222C202 219 207 216 210 213C214 210 218 209 221 207C224 204 226 201 228 199C231 196 234 192 238 190C241 188 246 186 250 185C254 184 259 184 264 185C268 186 273 187 277 189C282 191 286 193 290 196C293 200 296 204 297 209C298 213 298 219 298 223C297 228 296 232 295 236Z'/%3E%3Cpath id='c7' d='M302 48C301 49 301 49 302 51C302 52 303 53 304 55C304 56 304 58 303 59C302 60 300 60 299 60C298 61 296 60 295 60C294 60 293 60 292 60C291 61 290 61 289 61C287 61 286 61 285 60C284 59 283 58 282 58C281 57 280 56 279 56C277 55 275 54 274 53C273 52 272 50 272 48C272 46 274 45 276 44C278 43 281 43 283 43C285 43 286 43 287 43C288 43 288 42 288 41C288 40 288 38 289 37C290 36 291 35 292 34C293 33 295 33 296 33C298 32 299 32 301 32C303 32 305 33 306 34C307 35 308 37 308 39C308 41 306 43 305 45C304 46 302 47 302 48Z'/%3E%3Cpath id='c8' d='M319 48C319 50 318 53 318 55C318 57 318 60 317 63C317 65 316 68 315 71C313 73 310 75 308 75C305 76 302 76 299 76C297 75 294 74 292 74C290 74 287 75 285 75C282 75 279 76 276 76C273 75 270 74 268 72C265 71 264 68 263 65C261 62 261 59 261 56C260 54 260 51 261 48C261 45 262 43 264 40C265 38 268 37 270 35C272 34 274 33 276 32C278 31 279 29 280 27C281 25 282 22 284 19C286 17 289 14 292 13C295 12 299 12 301 13C304 14 307 17 309 19C311 21 312 24 314 26C315 28 317 31 318 33C319 35 320 38 320 40C320 43 320 46 319 48Z'/%3E%3C/defs%3E%3Cg fill='none' stroke='%23000' stroke-width='1.15'%3E%3Cuse href='%23c0' x='-320' y='-320'/%3E%3Cuse href='%23c0' x='-320' y='0'/%3E%3Cuse href='%23c0' x='-320' y='320'/%3E%3Cuse href='%23c0' x='0' y='-320'/%3E%3Cuse href='%23c0'/%3E%3Cuse href='%23c0' x='0' y='320'/%3E%3Cuse href='%23c0' x='320' y='-320'/%3E%3Cuse href='%23c0' x='320' y='0'/%3E%3Cuse href='%23c0' x='320' y='320'/%3E%3Cuse href='%23c1' x='-320' y='-320'/%3E%3Cuse href='%23c1' x='-320' y='0'/%3E%3Cuse href='%23c1' x='-320' y='320'/%3E%3Cuse href='%23c1' x='0' y='-320'/%3E%3Cuse href='%23c1'/%3E%3Cuse href='%23c1' x='0' y='320'/%3E%3Cuse href='%23c1' x='320' y='-320'/%3E%3Cuse href='%23c1' x='320' y='0'/%3E%3Cuse href='%23c1' x='320' y='320'/%3E%3Cuse href='%23c2' x='-320' y='-320'/%3E%3Cuse href='%23c2' x='-320' y='0'/%3E%3Cuse href='%23c2' x='-320' y='320'/%3E%3Cuse href='%23c2' x='0' y='-320'/%3E%3Cuse href='%23c2'/%3E%3Cuse href='%23c2' x='0' y='320'/%3E%3Cuse href='%23c2' x='320' y='-320'/%3E%3Cuse href='%23c2' x='320' y='0'/%3E%3Cuse href='%23c2' x='320' y='320'/%3E%3Cuse href='%23c3' x='-320' y='-320'/%3E%3Cuse href='%23c3' x='-320' y='0'/%3E%3Cuse href='%23c3' x='-320' y='320'/%3E%3Cuse href='%23c3' x='0' y='-320'/%3E%3Cuse href='%23c3'/%3E%3Cuse href='%23c3' x='0' y='320'/%3E%3Cuse href='%23c3' x='320' y='-320'/%3E%3Cuse href='%23c3' x='320' y='0'/%3E%3Cuse href='%23c3' x='320' y='320'/%3E%3Cuse href='%23c4' x='-320' y='-320'/%3E%3Cuse href='%23c4' x='-320' y='0'/%3E%3Cuse href='%23c4' x='-320' y='320'/%3E%3Cuse href='%23c4' x='0' y='-320'/%3E%3Cuse href='%23c4'/%3E%3Cuse href='%23c4' x='0' y='320'/%3E%3Cuse href='%23c4' x='320' y='-320'/%3E%3Cuse href='%23c4' x='320' y='0'/%3E%3Cuse href='%23c4' x='320' y='320'/%3E%3Cuse href='%23c5' x='-320' y='-320'/%3E%3Cuse href='%23c5' x='-320' y='0'/%3E%3Cuse href='%23c5' x='-320' y='320'/%3E%3Cuse href='%23c5' x='0' y='-320'/%3E%3Cuse href='%23c5'/%3E%3Cuse href='%23c5' x='0' y='320'/%3E%3Cuse href='%23c5' x='320' y='-320'/%3E%3Cuse href='%23c5' x='320' y='0'/%3E%3Cuse href='%23c5' x='320' y='320'/%3E%3Cuse href='%23c6' x='-320' y='-320'/%3E%3Cuse href='%23c6' x='-320' y='0'/%3E%3Cuse href='%23c6' x='-320' y='320'/%3E%3Cuse href='%23c6' x='0' y='-320'/%3E%3Cuse href='%23c6'/%3E%3Cuse href='%23c6' x='0' y='320'/%3E%3Cuse href='%23c6' x='320' y='-320'/%3E%3Cuse href='%23c6' x='320' y='0'/%3E%3Cuse href='%23c6' x='320' y='320'/%3E%3Cuse href='%23c7' x='-320' y='-320'/%3E%3Cuse href='%23c7' x='-320' y='0'/%3E%3Cuse href='%23c7' x='-320' y='320'/%3E%3Cuse href='%23c7' x='0' y='-320'/%3E%3Cuse href='%23c7'/%3E%3Cuse href='%23c7' x='0' y='320'/%3E%3Cuse href='%23c7' x='320' y='-320'/%3E%3Cuse href='%23c7' x='320' y='0'/%3E%3Cuse href='%23c7' x='320' y='320'/%3E%3Cuse href='%23c8' x='-320' y='-320'/%3E%3Cuse href='%23c8' x='-320' y='0'/%3E%3Cuse href='%23c8' x='-320' y='320'/%3E%3Cuse href='%23c8' x='0' y='-320'/%3E%3Cuse href='%23c8'/%3E%3Cuse href='%23c8' x='0' y='320'/%3E%3Cuse href='%23c8' x='320' y='-320'/%3E%3Cuse href='%23c8' x='320' y='0'/%3E%3Cuse href='%23c8' x='320' y='320'/%3E%3C/g%3E%3C/svg%3E");
+    --grad-tint:  var(--accent-rgb);        /* screen color A — top-left */
+    /* Screen color B — bottom-right. Derived from the accent, not a fixed hue.
+       It used to be a hardcoded sky-blue, which is fine as a default only if a
+       pillar is always active; if data-domain is ever missing (a failed boot
+       script, a stale cached page) that blue reappears under every palette,
+       which is precisely the bug this whole section exists to remove. */
+    --grad-tint2: var(--accent-rgb-deep);
+    /* Alpha pulled well down from the old rose values. The previous 0.26 wash was doing a lot of
+       decorative work; a tactical instrument palette wants the background to recede so the status
+       colors (green/amber/red) are the only saturated things on screen. */
+    --grad-a: 0.10;             /* per-screen wash strength */
+    --grad-a-subtle: 0.05;      /* map/legend screen — kept much fainter on purpose */
+    --net-tint: 245,158,11;     /* offline amber */
+    --net-a: 0;                 /* 0 = online/invisible; flipped by html[data-network="offline"] */
+    --gps-tint: var(--accent-rgb);
+    --gps-a: 0;                 /* 0 = no active fix reading; flipped by #panel-collect[data-gps] */
+    /* ══ PREMIUM GIS TEXTURE ══ — a coordinate-grid graticule (with small tick marks at each
+       intersection) plus a control-point dot centered in every cell, laid over the rose gradient so
+       large flat washes of color read as a surveyor's grid sheet rather than a flat digital fill —
+       on-theme for an app about plotting geolocated points (echoes both the tick-marked measure-ring
+       used for the brand mark / capture button, and the fixed control points on a survey grid).
+       Pure SVG lines + a circle baked into a 64x64 tile, alpha baked into each shape via low
+       `opacity` values rather than relying on background-blend-mode, so it renders identically and
+       cheaply everywhere. Tiles via the default background-repeat, sits as the topmost layer so it
+       reads on every gradient stop, not just the base color. */
+    /* ══ GRATICULE (map + empty states ONLY) ══
+       The coordinate grid used to be baked into --app-gradient, so every form, header and nav bar
+       in the app sat on a dotted grid sheet. That texture reads as noise behind dense input rows.
+       It now lives in its own token, applied deliberately via .has-graticule (see below) on map
+       frames and empty-state containers, at roughly a third of its old strength — the shape stays
+       legible as a survey grid without competing with foreground text. */
+    --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cline x1='0' y1='0' x2='64' y2='0' stroke='white' stroke-width='0.6' opacity='0.05'/%3E%3Cline x1='0' y1='0' x2='0' y2='64' stroke='white' stroke-width='0.6' opacity='0.05'/%3E%3Cline x1='0' y1='0' x2='7' y2='0' stroke='white' stroke-width='1.1' opacity='0.09'/%3E%3Cline x1='0' y1='0' x2='0' y2='7' stroke='white' stroke-width='1.1' opacity='0.09'/%3E%3Ccircle cx='32' cy='32' r='1.3' fill='white' opacity='0.09'/%3E%3C/svg%3E");
+    --app-gradient: radial-gradient(circle at 50% 0%, rgba(var(--net-tint), var(--net-a)) 0%, transparent 60%), radial-gradient(circle at 50% 100%, rgba(var(--gps-tint), var(--gps-a)) 0%, transparent 65%), radial-gradient(ellipse 1050px 820px at 5% -10%, rgba(var(--grad-tint), var(--grad-a)) 0%, transparent 72%), radial-gradient(ellipse 1050px 820px at 100% 115%, rgba(var(--grad-tint2), var(--grad-a)) 0%, transparent 72%), linear-gradient(165deg, var(--grad-1) 0%, var(--grad-2) 100%);
+    --app-gradient-subtle: radial-gradient(circle at 50% 0%, rgba(var(--net-tint), var(--net-a)) 0%, transparent 60%), radial-gradient(ellipse 1050px 820px at 5% -10%, rgba(var(--grad-tint), var(--grad-a-subtle)) 0%, transparent 72%), radial-gradient(ellipse 1050px 820px at 100% 115%, rgba(var(--grad-tint2), var(--grad-a-subtle)) 0%, transparent 72%), linear-gradient(165deg, var(--grad-1) 0%, var(--grad-2) 100%);
+  }
+  /* Same rose-red identity color on every screen (previously each screen had its own distinct hue;
+     now unified on request). Review keeps --app-gradient-subtle at a much lower alpha regardless. */
+  /* ══ PER-SCREEN WASH ══
+     Both stops now come from the active pillar. They used to hardcode a fixed
+     sky-blue as the second stop on every screen, which meant the bottom-right
+     half of the background wash was the SAME BLUE in all five themes — a large
+     share of why switching palettes barely registered. The screens are still
+     distinguished from each other, but by wash strength and the mesh, not by
+     fighting the theme with a hue that ignores it. */
+  #view-projects,
+  #panel-dashboard,
+  #panel-collect,
+  #panel-review,
+  #panel-import,
+  #panel-export { --grad-tint: var(--accent-rgb); --grad-tint2: var(--accent-rgb-deep); }
+
+  /* Network status (offline) — app-wide, its own layer so it's never overridden by a screen's
+     own tint variables above. GPS fix quality — Collect screen only, same idea. */
+  html[data-network="offline"] { --net-a: 0.09; }
+  #panel-collect[data-gps="good"]  { --gps-tint: 34,197,94;  --gps-a: 0.11; }
+  #panel-collect[data-gps="poor"]  { --gps-tint: 245,158,11; --gps-a: 0.11; }
+  #panel-collect[data-gps="error"] { --gps-tint: 239,68,68;  --gps-a: 0.11; }
+  /* ══ LIGHT THEME ══ — same variable names, warm off-white palette. Orange accent and the
+     on-accent/on-danger/accent2 pairings stay constant across themes by design. */
+  [data-theme="light"] {
+    /* Light theme is the outdoor/daylight mode for field crews, so it stays high-luminance —
+       but the warm cream base is now a cool slate-tinted white so it reads as the same product
+       as the dark theme rather than a different app. Accent darkens to emerald-700 because
+       #10B981 on white fails contrast for text and small icons. */
+    --bg-primary:      #F8FAFC;
+    --input-bg:     #F1F5F9;
+    --card-bg: #FFFFFF;
+    --surface-sunken:#F1F5F9;
+    --raised:  #E2E8F0;
+    --card-border:  #E2E8F0;
+    --accent-primary:  #059669;
+    --accent-hover: #047857;
+    --white:   #0F172A;
+    --text-primary:    #0F172A;
+    --text-secondary:   #64748B;
+    --text-tertiary:  #64748B;
+    /* Slate #64748B is the spec inactive tone, but on the light theme's white nav it drops below
+       a comfortable contrast ratio, so the light theme steps it one shade darker. */
+    --nav-inactive: #556274;
+    /* ══ STATUS COLOURS ARE DELIBERATELY NOT OVERRIDDEN HERE ══
+       --success / --warn / --danger are inherited unchanged from :root so a green fix reads as
+       the same green in both themes. A crew glancing at a screen outdoors should recognise fix
+       quality by hue alone, without first working out which theme they're in. The trade-off is
+       contrast: #22C55E on white is ~2.3:1, fine for a dot, chip or icon but below the 4.5:1
+       text minimum — so where a status colour carries small TEXT, use the -ink variants below,
+       which are hue-matched but darkened for legibility on light surfaces. */
+    --success-ink: #15803D;
+    --warn-ink:    #B45309;
+    --danger-ink:  #DC2626;
+    --input-inset: inset 0 1px 2px rgba(15,23,42,0.06);
+    --accent-rgb:      5,150,105;
+    --accent-rgb-deep: 4,120,87;
+    --on-accent:  #FFFFFF;
+    --accent2:    #0369A1;
+    --on-accent2: #FFFFFF;
+    --cta:     #0F172A;
+    --on-cta:  #F8FAFC;
+    --chip-info-bg:     rgba(3,105,161,0.10);
+    --chip-info-border: rgba(3,105,161,0.30);
+    --chip-info-text:   #0369A1;
+    --nav-bg:  rgba(241,245,249,0.88);
+    --clay-shadow: 0 1px 2px rgba(15,23,42,0.10);
+    --clay-shadow-active: inset 0 2px 4px rgba(15,23,42,0.14);
+    --card-shadow: 0 1px 2px rgba(15,23,42,0.07);
+    /* Light-mode gradient: high-luminance, faded rose stops (vs. dark mode's deep desaturated
+       ones) — bright enough to read outdoors without the flat stark-white of a single flat --bg-primary.
+       Alpha here is much higher than dark mode's: a near-white base washes out the same low alpha
+       far more than a near-black one does, so matching dark mode's number was invisible in
+       practice. grad-2 is also pulled further from grad-1 for a touch more base-tone depth.
+       Both stops carry a rose undertone (not neutral cream) so the per-screen rose-red wash reads
+       as rose-red rather than blending into a warm peach/tan cast. */
+    --grad-1: #F8FAFC;
+    --grad-2: #E7EEF5;
+    --grad-a: 0.20;
+    --grad-a-subtle: 0.09;
+    --net-a: 0;
+    --gps-a: 0;
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════════
+     DOMAIN THEME SYSTEM
+     ══════════════════════════════════════════════════════════════════════════════
+     ADAPTATION NOTE — read before editing.
+     The brief asked for `data-theme="default|forestry|agric|survey|climate"` plus a `.dark`
+     class. This app already owns `data-theme` for light/dark, and roughly 200 existing rules
+     plus the pre-paint boot script, the Android status-bar bridge and the PWA theme-color meta
+     all key off it. Renaming that would have been a large, risky rewrite for no visual gain.
+     So the two axes are kept orthogonal:
+         data-theme  = "light" | "dark"      (unchanged, existing machinery)
+         data-domain = "default" | "forestry" | "agric" | "survey" | "climate"   (new)
+     Both live on <html>, so any combination of the ten is expressible.
+
+     The other deliberate deviation: the brief's token names (--canvas-bg, --surface-card,
+     --primary-accent…) name the same roles this file already has (--bg-primary, --card-bg,
+     --accent-primary…). Declaring them as a second, independent set would mean every component
+     had a 50/50 chance of reading the stale one. They are declared as ALIASES instead (see the
+     block below), so the brief's vocabulary works everywhere while the app's ~200 existing rules
+     keep re-themeing automatically — which is what "fully comprehensive" actually requires.
+
+     Each domain therefore only has to override the small set of tokens that carry its identity:
+     the accent family (buttons, active tabs, focus rings, badges) and the mesh glow colours.
+     Everything else — surfaces, text, status colours, borders — is inherited from the light/dark
+     base above, which is what keeps all five domains legible in sunlight and on OLED.
+     ══════════════════════════════════════════════════════════════════════════════ */
+
+  /* ── BRIEF-SPEC ALIASES ── one direction only: alias → existing token. Never the reverse, or
+     the two sets can drift apart the next time the palette is retinted. */
+  :root {
+    --canvas-bg:           var(--bg-primary);
+    --surface-card:        var(--card-bg);
+    --surface-modal:       var(--card-bg);
+    --modal-backdrop:      rgba(0,0,0,0.65);
+    --text-on-accent:      var(--on-accent);
+    --primary-accent:      var(--accent-primary);
+    --primary-accent-hover:var(--accent-hover);
+    --border-subtle:       var(--card-border);
+    /* Focus ring is its own token, not the accent, because it has a different job: it must be
+       findable at a glance in direct sun on a device you are holding at arm's length. It stays
+       the accent hue but is never allowed to be the muted end of it. */
+    --border-focus:        var(--accent-hover);
+    --badge-bg:            rgba(var(--accent-rgb), 0.14);
+    --badge-text:          var(--accent-hover);
+    /* Ambient mesh blobs. glow-3 is an addition to the brief: two blobs on a large phone screen
+       read as two distinct smudges rather than a field, and the third (always the accent) is what
+       ties the background to whichever domain is active. glow-4 was added for the same reason
+       again — with three, the centre of a tall phone screen still fell between them and read as
+       dead space, which is the opposite of the continuous drifting field this is meant to be. */
+    --glow-1: #064E3B;
+    --glow-2: #0D9488;
+    --glow-3: var(--accent-primary);
+    --glow-4: var(--accent-hover);
+  }
+  [data-theme="light"] {
+    --modal-backdrop: rgba(15,23,42,0.45);
+    --badge-text:     var(--accent-primary);
+    --glow-1: #D3EFEA;
+    --glow-2: #E0F2FE;
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     THE SIX PILLARS
+     ══════════════════════════════════════════════════════════════════════════
+     Renamed and re-tinted from the old five (Hydrology / Forestry / Agriculture
+     / Survey / Climate). Migration of stored values lives in DOMAIN_ALIASES.
+
+     WHY THE OLD SET LOOKED THE SAME — three failures compounding:
+       1. Three of the five accents were greens (#10B981, #22C55E, #A3E635) and
+          the other two were blues (#38BDF8, #22D3EE). At arm's length in
+          daylight those are two colours, not five.
+       2. Every light-mode block reset --grad-1/--grad-2 back to the SAME
+          #F8FAFC/#E7EEF5. Light mode is the sunlight mode — the one actually
+          used on a survey — and in it the page base never moved at all.
+       3. The light-mode glows were pastels (#E2E8F0, #CBD5E1 for Survey are
+          literally greys) floating over a near-white base. Invisible.
+
+     The fix is hue spacing done deliberately rather than by eye. Accents sit on
+     an even OKLCh wheel — Land ~35°, Environment ~160°, Water ~200°,
+     Geospatial ~243°, Climate ~280°, People ~350° — so no two can be confused
+     even by a partially colour-blind eye or through a scratched screen
+     protector. Each pillar then carries its own canvas in BOTH modes, so
+     switching themes moves the whole screen and not just the buttons.
+
+     SUNLIGHT: every light-mode accent clears 4.5:1 against its own label AND
+     against a white card, verified numerically in tests/theme.test.js rather
+     than assumed. Light-mode glows keep real chroma instead of dropping to
+     pastel, because a wash you cannot see is not a theme.
+
+     AMBIENT GRADIENTS: each pillar's glows are three DIFFERENT hues from one
+     family, not three tints of one hue — that hue travel across the blobs is
+     what gives the drifting, iridescent quality rather than a flat coloured
+     fog. A fourth blob (--glow-4) fills the middle of the screen so the field
+     reads as continuous instead of two smudges in opposite corners. */
+
+  /* ── 1. EARTH & LAND · soils, terrain, land use ──
+     Ochre → gold → burnt sienna. The only warm-dominant pillar with a sand
+     canvas, which makes it the fastest of the six to recognise at a glance. */
+  html[data-domain="land"] {
+    --accent-primary:#F59E0B; --accent-hover:#FBBF24;
+    --accent-rgb:245,158,11; --accent-rgb-deep:217,119,6;
+    --on-accent:#3B1B02;
+    --grad-1:#160F07; --grad-2:#241706;
+    --glow-1:#7C3D05; --glow-2:#6B5202; --glow-4:#5A2A06;
+  }
+  html[data-domain="land"][data-theme="light"] {
+    --accent-primary:#92400E; --accent-hover:#78350F;
+    --accent-rgb:146,64,14; --accent-rgb-deep:120,53,15;
+    --on-accent:#FFFFFF; --badge-text:#78350F;
+    --grad-1:#FDEDD3; --grad-2:#F2C77F;
+    --glow-1:#F59E0B; --glow-2:#FB923C; --glow-4:#FCD34D;
+  }
+
+  /* ── 2. WATER · hydrology, drainage, WASH ──
+     Deep ocean blue → sky. Blue, NOT cyan: cyan is Geospatial's, and when Water
+     held it the two were indistinguishable. A navy canvas is also a truer
+     "water" than a bright aqua ever was. */
+  html[data-domain="water"] {
+    --accent-primary:#60A5FA; --accent-hover:#93C5FD;
+    --accent-rgb:96,165,250; --accent-rgb-deep:59,130,246;
+    --on-accent:#0A1F44;
+    --grad-1:#060D1F; --grad-2:#08152F;
+    --glow-1:#1E3A8A; --glow-2:#0C4A6E; --glow-4:#1E40AF;
+  }
+  html[data-domain="water"][data-theme="light"] {
+    --accent-primary:#1E40AF; --accent-hover:#1E3A8A;
+    --accent-rgb:30,64,175; --accent-rgb-deep:30,58,138;
+    --on-accent:#FFFFFF; --badge-text:#1E3A8A;
+    --grad-1:#DEEAFD; --grad-2:#8FB8F3;
+    --glow-1:#60A5FA; --glow-2:#38BDF8; --glow-4:#93C5FD;
+  }
+
+  /* ── 3. CLIMATE · weather, hazard, risk ──
+     Violet → fuchsia, the hot end of a hazard ramp. Deliberately not a blue:
+     the previous palette's Climate and Survey were both blues and were the pair
+     nobody could tell apart. */
+  html[data-domain="climate"] {
+    --accent-primary:#E879F9; --accent-hover:#F0ABFC;
+    --accent-rgb:232,121,249; --accent-rgb-deep:217,70,239;
+    --on-accent:#3B0B41;
+    --grad-1:#1A0716; --grad-2:#280A21;
+    --glow-1:#86198F; --glow-2:#7E22CE; --glow-4:#9D174D;
+  }
+  html[data-domain="climate"][data-theme="light"] {
+    --accent-primary:#86198F; --accent-hover:#701A75;
+    --accent-rgb:134,25,143; --accent-rgb-deep:112,26,117;
+    --on-accent:#FFFFFF; --badge-text:#701A75;
+    --grad-1:#F6E4FC; --grad-2:#D6A2EE;
+    --glow-1:#A855F7; --glow-2:#E879F9; --glow-4:#A78BFA;
+  }
+
+  /* ── 4. ENVIRONMENT · forestry, conservation, biodiversity ──
+     Emerald → lime. Green is unambiguous and no other pillar borrows it. */
+  html[data-domain="environment"] {
+    --accent-primary:#34D399; --accent-hover:#6EE7B7;
+    --accent-rgb:52,211,153; --accent-rgb-deep:16,185,129;
+    --on-accent:#02231A;
+    --grad-1:#05130D; --grad-2:#072016;
+    --glow-1:#065F46; --glow-2:#3F6212; --glow-4:#064E3B;
+  }
+  html[data-domain="environment"][data-theme="light"] {
+    --accent-primary:#065F46; --accent-hover:#064E3B;
+    --accent-rgb:6,95,70; --accent-rgb-deep:6,78,59;
+    --on-accent:#FFFFFF; --badge-text:#064E3B;
+    --grad-1:#DFF6E9; --grad-2:#84D2A8;
+    --glow-1:#34D399; --glow-2:#A3E635; --glow-4:#6EE7B7;
+  }
+
+  /* ── 5. PEOPLE & PLACES · settlements, households, social survey ──
+     Rose → magenta. Warm like Land but far pinker, and its canvas is rose where
+     Land's is sand, so the two never collide. */
+  html[data-domain="people"] {
+    --accent-primary:#FB7185; --accent-hover:#FDA4AF;
+    --accent-rgb:251,113,133; --accent-rgb-deep:244,63,94;
+    --on-accent:#3F0517;
+    --grad-1:#18070B; --grad-2:#260B11;
+    --glow-1:#9F1239; --glow-2:#86198F; --glow-4:#7F1D1D;
+  }
+  html[data-domain="people"][data-theme="light"] {
+    --accent-primary:#9F1239; --accent-hover:#881337;
+    --accent-rgb:159,18,57; --accent-rgb-deep:136,19,55;
+    --on-accent:#FFFFFF; --badge-text:#881337;
+    --grad-1:#FFEAEE; --grad-2:#F7A3B4;
+    --glow-1:#FB7185; --glow-2:#F472B6; --glow-4:#FDA4AF;
+  }
+
+  /* ── 6. GEOSPATIAL · cadastral, control, instrument work ──
+     The techy one, and the only pillar that is deliberately ACHROMATIC. Its mesh
+     is graphite and slate; the cyan appears only in the accent and in the
+     coordinate graticule laid over the mesh (see .mesh-bg::after further down).
+     That black-panel-with-one-live-colour is the instrument read — a total
+     station display, a CAD viewport — and being the only neutral pillar is
+     precisely what stops it blurring into Water or Environment. Replaces the
+     old "Survey". */
+  html[data-domain="geospatial"] {
+    --accent-primary:#22D3EE; --accent-hover:#67E8F9;
+    --accent-rgb:34,211,238; --accent-rgb-deep:6,182,212;
+    --on-accent:#04222B;
+    --grad-1:#08090C; --grad-2:#101216;
+    --glow-1:#0F172A; --glow-2:#164E63; --glow-4:#1E293B;
+  }
+  html[data-domain="geospatial"][data-theme="light"] {
+    --accent-primary:#155E75; --accent-hover:#164E63;
+    --accent-rgb:21,94,117; --accent-rgb-deep:22,78,99;
+    --on-accent:#FFFFFF; --badge-text:#164E63;
+    --grad-1:#F2F4F6; --grad-2:#D8DEE4;
+    --glow-1:#22D3EE; --glow-2:#64748B; --glow-4:#94A3B8;
+  }
+
+  html[data-domain] { --grad-tint: var(--accent-rgb); --grad-tint2: var(--accent-rgb-deep); }
+
+  /* ══════════════════════════════════════════════════════════════════════════════
+     AMBIENT MESH BACKGROUND
+     ══════════════════════════════════════════════════════════════════════════════
+     One fixed layer at z-index:-1 for the whole app. It paints the existing --app-gradient (so
+     the offline and GPS-fix washes still work, see the html[data-gps] rules below) and floats
+     three soft radial-gradient blobs over it.
+     WHY z-index:-1 AND NOT 0: a positioned element at z-index:0 paints in step 8 of the painting
+     order, i.e. AFTER the in-flow content of every card and form field. It would cover the app.
+     -1 puts it above the canvas background but below all block backgrounds and inline content,
+     which is exactly the slot a background layer wants.
+     The blobs are only visible because the view/panel backgrounds were made transparent — see
+     "MESH: VIEWS ARE TRANSPARENT" further down. */
+  .mesh-bg {
+    position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none;
+    background: var(--app-gradient);
+    /* ══ SCROLL ISOLATION ══
+       The views above are transparent now, so without this the browser cannot treat the page as
+       an opaque scroller and has to repaint the full viewport — including this layer — on every
+       scroll frame. translateZ(0) forces the mesh onto its own compositor layer, and
+       contain:strict promises the browser that nothing inside can affect layout, paint or size
+       outside it. Together they let the content scroll as a cheap blit over a static backdrop
+       instead of a full-page repaint. This pair is what actually fixes the scroll stutter. */
+    transform: translateZ(0);
+    contain: strict;
+  }
