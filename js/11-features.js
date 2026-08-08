@@ -195,42 +195,98 @@ function saveFeature(){
 }
 
 
+// ══ IDs MUST NOT COLLIDE ══
+// Date.now() alone gave two features saved inside the same millisecond the same id — and id is
+// what editFeature/deleteFeature/selectAttrRow all key off, so a collision silently edits or
+// deletes the wrong feature. Cheap to make certain instead.
+let _lastFeatureId = 0;
+
+function newFeatureId(){
+  // The floor considers what is already in the project, not just what this session issued, so a
+  // device whose clock has moved backwards still cannot mint an id that is already in use.
+  const maxExisting = savedFeatures.reduce((m,f)=> (typeof f.id === 'number' && f.id > m) ? f.id : m, 0);
+  const floor = Math.max(_lastFeatureId, maxExisting);
+  let id = Date.now();
+  if (id <= floor) id = floor + 1;
+  _lastFeatureId = id;
+  return id;
+}
+
+
+// ══ SAVE IS ALL-OR-NOTHING ══
+// This used to blank the form, drop currentVertices and clear the crash draft BEFORE calling
+// persist(), then ignore what persist() returned. When a save was refused or the disk write
+// failed, the app had already destroyed every copy of the work except the one in memory — which
+// the next launch did not have. The crew saw "saved ✓", came back to an empty project, and the
+// only surviving trace was the vertices (persisted at capture time) with no name on them.
+//
+// Now the write happens first and the clean-up only runs if the bytes actually landed. If they
+// did not, every part of the capture is put back exactly as it was so it can be retried or
+// exported — nothing is thrown away on the strength of a save that did not happen.
 function finalizeSaveFeature(ft,name,ref,assignedTo,notes,attrs,vertices){
   const wasEditing = !!editingFeatureId;
 
+  // Rollback snapshot, taken before anything is mutated.
+  const prevSaved = savedFeatures.slice();
+  const prevVertices = currentVertices;
+  const prevOpenVertexIndex = openVertexIndex;
+  const prevEditingId = editingFeatureId;
+  const prevEditingSnapshot = editingFeatureSnapshot;
+
+  let successMsg;
   if (wasEditing) {
     const idx = savedFeatures.findIndex(f => f.id === editingFeatureId);
     if (idx === -1) {
       // Original entry vanished (e.g. deleted or "Clear all" elsewhere) while this edit was open —
       // save as a new feature instead of silently losing the edit.
-      savedFeatures.push({ id:Date.now(), name, ref, featureTypeId:ft.id, featureTypeName:ft.name, assignedTo, attrs, notes, geometryType:ft.geometryType, vertices, savedAt:new Date().toISOString() });
-      showToast('Original feature no longer exists. Saved as a new feature.');
+      savedFeatures.push({ id:newFeatureId(), name, ref, featureTypeId:ft.id, featureTypeName:ft.name, assignedTo, attrs, notes, geometryType:ft.geometryType, vertices, savedAt:new Date().toISOString() });
+      successMsg = 'Original feature no longer exists. Saved as a new feature.';
     } else {
       const original = savedFeatures[idx];
       // Update in place: keep the original id and savedAt, add editedAt as a record that this was
       // modified after initial capture.
       savedFeatures[idx] = { ...original, name, ref, featureTypeId:ft.id, featureTypeName:ft.name, assignedTo, attrs, notes, geometryType:ft.geometryType, vertices, savedAt:original.savedAt, editedAt:new Date().toISOString() };
-      showToast(`"${name}" updated ✓`);
+      successMsg = `"${name}" updated ✓`;
     }
-    editingFeatureId = null; editingFeatureSnapshot = null;
-    document.getElementById('editModeBanner').style.display = 'none';
-    document.getElementById('cancelEditBtn').style.display = 'none';
   } else {
-    savedFeatures.push({ id:Date.now(), name, ref, featureTypeId:ft.id, featureTypeName:ft.name, assignedTo, attrs, notes, geometryType:ft.geometryType, vertices, savedAt:new Date().toISOString() });
-    showToast(`"${name}" saved ✓`);
+    savedFeatures.push({ id:newFeatureId(), name, ref, featureTypeId:ft.id, featureTypeName:ft.name, assignedTo, attrs, notes, geometryType:ft.geometryType, vertices, savedAt:new Date().toISOString() });
+    successMsg = `"${name}" saved ✓`;
   }
 
-  rememberAssignee(assignedTo);
+  // Cleared before the write so what reaches disk is exactly what the screen will show
+  // afterwards — restored below if the write does not land.
   currentVertices=[]; openVertexIndex=null;
+
+  if (persist() === false) {
+    savedFeatures = prevSaved;
+    currentVertices = prevVertices;
+    openVertexIndex = prevOpenVertexIndex;
+    editingFeatureId = prevEditingId;
+    editingFeatureSnapshot = prevEditingSnapshot;
+    renderPoints(); renderVertexEditor(); renderFeatures(); updateStats(); updateGeometryUI(ft);
+    // The form still holds everything the user typed; make sure a copy is on disk too, so even
+    // killing the app now does not lose it.
+    saveCollectDraft();
+    showToast('Could not save to this device — your capture is still here. Export a backup now.');
+    return;
+  }
+
+  editingFeatureId = null; editingFeatureSnapshot = null;
+  document.getElementById('editModeBanner').style.display = 'none';
+  document.getElementById('cancelEditBtn').style.display = 'none';
+  showToast(successMsg);
+
+  rememberAssignee(assignedTo);
   customFeatureAttrs={}; renderCustomAttrsList();
   document.getElementById('featureName').value='';
   document.getElementById('featureRef').value='';
   document.getElementById('featureAssignedTo').value='';
   document.getElementById('featureNotes').value='';
-  // The draft has served its purpose the moment the feature is in savedFeatures —
+  refIdAutoFilled = null;   // the next capture of this type should autofill afresh
+  // The draft has served its purpose the moment the feature is on disk —
   // leaving it behind would offer to "recover" work that is already saved.
   clearDraft();
-  persist(); renderPoints(); renderVertexEditor(); renderFeatures(); updateStats(); updateGeometryUI(ft);
+  renderPoints(); renderVertexEditor(); renderFeatures(); updateStats(); updateGeometryUI(ft);
   if (reviewMap) renderReviewMap();
   maybeAutoExportToDevice();
   // Saving always ends the current data-entry burst — including a fresh capture that stays on
