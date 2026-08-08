@@ -1,0 +1,175 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Needed so the release step below is allowed to create/update a GitHub Release and upload a file
+# to it. Without this, the default token is read-only and that step fails with a 403.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # scripts/patch-android-ui.py needs Pillow (PIL) to compose the launcher icon mipmaps.
+      # ubuntu-latest ships python3 but not pip/Pillow, so this has to be explicit.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies for UI patch script
+        run: pip install pillow
+
+      - name: Install dependencies
+        run: npm install
+
+      # Fails the build on a regression rather than shipping it. Cheap (no
+      # browser, no emulator) and it covers the three things that have actually
+      # bitten in the field: data-destroying saves, the back button consuming
+      # presses without moving, and themes that stop being legible in sunlight.
+      - name: Run test suite
+        run: npm test
+
+      # The Pages site keeps index.html / plotedge-sw.js / plotedge.manifest.json at the repo
+      # root (that's what Pages serves). Capacitor wants its own web folder, so this step makes
+      # a throwaway copy at build time — nothing here gets committed back to the repo, so there's
+      # still only one real copy of the app to maintain.
+      - name: Stage web app into www/ for Capacitor
+        run: |
+          set -euo pipefail
+          mkdir -p www
+          cp index.html www/index.html
+          cp plotedge-sw.js www/plotedge-sw.js
+          cp plotedge.manifest.json www/plotedge.manifest.json
+          # The app is no longer a single file. Missing these would produce an APK
+          # that installs, launches, and shows a blank unstyled page — so the copy
+          # is verified rather than assumed.
+          cp -r css www/css
+          cp -r js www/js
+          test -n "$(ls -A www/css)" || { echo "::error::www/css is empty"; exit 1; }
+          test -n "$(ls -A www/js)"  || { echo "::error::www/js is empty";  exit 1; }
+          # Every file index.html asks for must actually be there.
+          for f in $(grep -o 'href="css/[^"]*"' index.html | cut -d'"' -f2) \
+                   $(grep -o 'src="js/[^"]*"'  index.html | cut -d'"' -f2); do
+            test -f "www/$f" || { echo "::error::index.html references $f but it was not staged"; exit 1; }
+          done
+          echo "Staged $(ls www/css | wc -l) stylesheets and $(ls www/js | wc -l) scripts."
+
+      - name: Add Android platform
+        run: npx cap add android
+
+      # `cap add android` generates an AndroidManifest.xml that only declares INTERNET, and it's
+      # regenerated from scratch on every run (the android/ folder isn't committed), so the extra
+      # permissions have to be re-injected here each build rather than committed once. Without
+      # this, Android auto-denies the permission request without showing a prompt AND hides the
+      # toggles in Settings -> Apps -> PlotEdge -> Permissions, so GPS/camera silently do nothing.
+      - name: Declare hardware permissions in AndroidManifest.xml
+        run: python3 scripts/patch-android-manifest.py
+
+      - name: Generate app icons from resources/icon.png
+        run: npx capacitor-assets generate --android
+        continue-on-error: true
+
+      # THIS STEP WAS MISSING. Everything in patch-android-ui.py - the runtime CAMERA
+      # permission request, edge-to-edge system bars, and the AndroidChrome status-bar
+      # theming bridge - lives in a rewritten MainActivity.java that this script writes.
+      # Without actually running it here, `cap add android`'s default, unmodified
+      # MainActivity.java is what gets compiled every time, no matter how correct the
+      # script itself is. Runs after the icon-generation step above so its own launcher
+      # icon composition (see the script's docstring for why) overwrites capacitor-assets'
+      # output rather than the other way around, and before `cap sync` / the Gradle build
+      # so the rewritten MainActivity.java is in place before compilation.
+      - name: Patch Android UI (edge-to-edge, camera permission, launcher icons)
+        run: python3 scripts/patch-android-ui.py
+
+      # ══ STABLE APP SIGNATURE ══
+      # Without this, Gradle invents a fresh ~/.android/debug.keystore on every
+      # runner, so every APK is signed by a different key. Android then refuses
+      # to update in place and the installer's only route is uninstall+install,
+      # which deletes /data/data/com.plotedge.app — i.e. the WebView localStorage
+      # holding every project, feature type and setting. That is the reported
+      # "cancel the first install, then update" behaviour AND the data wipe.
+      #
+      # Prefers the ANDROID_KEYSTORE_B64 repo secret if one is set; otherwise
+      # falls back to the keystore committed at signing/. Either way the key is
+      # the same on every build, which is the only thing Android cares about.
+      - name: Resolve signing keystore
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ANDROID_KEYSTORE_B64:-}" ]; then
+            echo "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/plotedge.keystore"
+            echo "PLOTEDGE_KEYSTORE_PATH=$RUNNER_TEMP/plotedge.keystore" >> "$GITHUB_ENV"
+            echo "Using keystore from ANDROID_KEYSTORE_B64 secret."
+          elif [ -f signing/plotedge-release.keystore ]; then
+            echo "PLOTEDGE_KEYSTORE_PATH=$PWD/signing/plotedge-release.keystore" >> "$GITHUB_ENV"
+            echo "Using the keystore committed at signing/plotedge-release.keystore."
+          else
+            echo "::error::No signing keystore available. Building would produce an APK that cannot update the installed app and would force an uninstall, wiping all captured data."
+            exit 1
+          fi
+
+      # versionCode comes from github.run_number, which only ever counts up —
+      # Android requires a strictly greater versionCode to accept an update.
+      - name: Apply signing config and bump versionCode
+        env:
+          PLOTEDGE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD || 'plotedge' }}
+          PLOTEDGE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'plotedge' }}
+          PLOTEDGE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD || 'plotedge' }}
+          PLOTEDGE_VERSION_CODE: ${{ github.run_number }}
+        run: python3 scripts/patch-android-signing.py
+
+      - name: Sync web assets into the Android project
+        run: npx cap sync android
+
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        run: cd android && ./gradlew assembleDebug --no-daemon
+
+      # Rename to a fixed filename (no version/commit hash in it) so the download link handed out
+      # below never changes — same URL works every time, even across rebuilds.
+      - name: Rename APK for release
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk android/app/build/outputs/apk/debug/PlotEdge.apk
+
+      - name: Upload APK (workflow artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: PlotEdge-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+      # Publishes the same APK to a permanent GitHub Release tagged "latest" — unlike the artifact
+      # above (expires after ~90 days, buried under Actions → this specific run), a Release has one
+      # stable page and one stable download URL that never changes between builds:
+      #   https://github.com/<you>/<repo>/releases/download/latest/PlotEdge.apk
+      # Re-running this workflow updates that same "latest" release/tag in place rather than piling
+      # up a new release per push, so there's never more than one to manage.
+      - name: Publish APK to "latest" GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: PlotEdge (latest build)
+          body: Automatically rebuilt from the latest push to `main`. Download `PlotEdge.apk` below.
+          make_latest: true
+          files: android/app/build/outputs/apk/debug/PlotEdge.apk
