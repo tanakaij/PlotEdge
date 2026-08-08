@@ -35,10 +35,26 @@ function doCapture(coords, weak){
 }
 
 
+// ══ A TAP ALWAYS ANSWERS ══
+// Both guards here used to `return` with no feedback whatsoever. Tapping Capture before the first
+// fix arrived, or twice in quick succession while walking a boundary, produced nothing: no vertex,
+// no toast, no sound. There is no way to tell that apart from a vertex that was recorded and not
+// drawn, which is the whole of "confusion of missing capture you have captured" — so the crew
+// re-tapped, or worse, walked on believing the corner was in. Every path now says what happened.
 function attemptCapture(){
-  if(!currentPos) return;
+  if(!currentPos){
+    showToast(gpsActive || extGpsActive
+      ? 'Waiting for a GPS fix — nothing captured yet. Use "Enter coordinates" if you need to log this now.'
+      : 'GPS is off. Start GPS above, or use "Enter coordinates".');
+    return;
+  }
   const now = Date.now();
-  if (now - lastCaptureAt < CAPTURE_DEBOUNCE_MS) return; // guards against an accidental double-tap logging two near-identical vertices
+  if (now - lastCaptureAt < CAPTURE_DEBOUNCE_MS){
+    // Reported rather than swallowed: silence here reads as a lost capture, and the crew's next
+    // move is to tap again, which the debounce eats too.
+    showToast(`Too fast — vertex ${currentVertices.length} is already in. Tap again in a moment for the next one.`);
+    return;
+  }
   const acc = currentPos.coords.accuracy;
   doCapture(currentPos.coords, acc > CAPTURE_ACCURACY_WARN_M);
 }
@@ -219,7 +235,28 @@ function updateShapePreview(){
     ? `<polygon class="sp-line" points="${pts}"></polygon>`
     : `<polyline class="sp-line" points="${pts}"></polyline>`;
   const dots = currentVertices.map((v,i)=>`<circle class="sp-vertex ${i===openVertexIndex?'sp-open':''}" cx="${cx(v).toFixed(1)}" cy="${cy(v).toFixed(1)}" r="${i===openVertexIndex?4.5:3}"></circle>`).join('');
-  svg.innerHTML = fillPoly + line + dots;
+  // ══ THE PREVIEW MUST SHOW ITS ORDER ══
+  // The plot drew the ring in capture order but gave no way to READ that order, so a shape that
+  // looked wrong was indistinguishable from a shape whose corners had been shot out of sequence —
+  // there was nothing on screen to check the numbering against. Labelling each vertex with its
+  // index (matching the numbers in the list below and the pins on the satellite map) makes the
+  // sequence legible, so a crossed polygon can be spotted and fixed with the ↑↓ buttons on the
+  // spot rather than after it reaches QGIS.
+  // Drawn last so labels sit above the fill, and offset up-left of the dot so they never sit on
+  // the vertex they name. A halo stroke keeps them readable over the fill in bright sun.
+  const labels = currentVertices.map((v,i)=>{
+    const x = cx(v), y = cy(v);
+    // Nudged back inside the viewBox at the extremes, or the first/last corner's number clips off.
+    const lx = Math.max(7, Math.min(W-7, x + 7));
+    const ly = Math.max(9, Math.min(H-3, y - 6));
+    return `<text class="sp-idx" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}">${i+1}</text>`;
+  }).join('');
+  // The first vertex gets a ring of its own: for a polygon it is the corner the ring closes back
+  // onto, which is the single most useful thing to be able to find at a glance.
+  const startMark = currentVertices.length
+    ? `<circle class="sp-start" cx="${cx(currentVertices[0]).toFixed(1)}" cy="${cy(currentVertices[0]).toFixed(1)}" r="6.5"></circle>`
+    : '';
+  svg.innerHTML = fillPoly + line + startMark + dots + labels;
   svg.classList.add('show');
 }
 
