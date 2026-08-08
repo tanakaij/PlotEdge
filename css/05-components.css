@@ -387,6 +387,11 @@
   .shape-preview .sp-fill { fill:rgba(var(--accent-rgb),0.14); stroke:none; }
   .shape-preview .sp-vertex { fill:var(--accent-primary); }
   .shape-preview .sp-vertex.sp-open { fill:var(--accent-hover); stroke:var(--bg-primary); stroke-width:2; }
+  /* Capture-order labels. paint-order:stroke draws the halo behind the glyph rather than over it,
+     which is what keeps a number legible where it crosses the polygon fill or a stroke. */
+  .shape-preview .sp-idx { fill:var(--text-primary); stroke:var(--surface-sunken); stroke-width:2.6px;
+    paint-order:stroke; font-size:9px; font-weight:800; font-family:inherit; pointer-events:none; }
+  .shape-preview .sp-start { fill:none; stroke:var(--accent-primary); stroke-width:1.6; opacity:0.75; }
   /* ══ VERTEX SATELLITE MAP ══ — a real, draggable-pin map layered on top of the abstract SVG
      preview above. The SVG plot is instant and works fully offline (pure lat/lon math, no tiles),
      so it stays as the always-on quick glance; this map is the tool for actually *fixing* a vertex
@@ -455,7 +460,15 @@
      content-visibility lets the browser skip layout and paint for rows scrolled out of view,
      which is what keeps a long list cheap; contain-intrinsic-size stops the scrollbar jumping
      by giving skipped rows a placeholder height. */
-  .point-item { display:flex; align-items:center; gap:10px; padding:11px 12px; border:1px solid var(--card-border); border-radius:12px; background:var(--surface-sunken); margin-bottom:6px; touch-action:pan-y; box-shadow: var(--card-shadow); content-visibility:auto; contain-intrinsic-size:auto 50px; }
+  /* ══ NO CONTENT-VISIBILITY HERE ══
+     This row carried `content-visibility:auto; contain-intrinsic-size:auto 50px`. That tells the
+     browser it may skip rendering a row that is off-screen and stand in a 50px placeholder — and
+     on Android WebViews the placeholder is what you get for a frame or more after the row scrolls
+     back in, especially while the list is being rebuilt on every capture. The result is rows that
+     appear blank or wrong-height exactly while the crew is checking whether the vertex they just
+     captured is there: indistinguishable from a lost capture. A vertex list is one feature's
+     worth of rows, so there was no rendering cost worth paying for it. */
+  .point-item { display:flex; align-items:center; gap:10px; padding:11px 12px; border:1px solid var(--card-border); border-radius:12px; background:var(--surface-sunken); margin-bottom:6px; touch-action:pan-y; box-shadow: var(--card-shadow); }
   .point-item.swipe-armed { will-change:transform; }
   .point-item.swipe-armed { background:rgba(var(--danger-rgb),0.16); border-color:var(--danger); }
   .pt-num { background:var(--raised); border:1px solid var(--card-border); color:var(--text-primary); border-radius:50%; width:26px; height:26px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; flex-shrink:0; }
