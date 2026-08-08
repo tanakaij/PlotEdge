@@ -391,17 +391,19 @@ function useCurrentLocationForSite() {
 
 function renderProjectsList() {
   const el = document.getElementById('projectsList');
-  // #projectsList lived on the Welcome screen, which is now a pure first-run screen with no list
-  // on it at all (see the markup for #view-projects). This function is kept as a guarded no-op
-  // rather than deleted because it is still called from six places — boot, renderProjectsScreen,
-  // refreshProjectsScreen, restoreLastSession and two error paths — and a missing-element crash
-  // in any of them would take the whole launch sequence down. The Project Manager renders the
-  // real list via renderProjectManager().
+  // Every other route onto #view-projects (renderProjectsScreen, refreshProjectsScreen, boot)
+  // only lands here when projects.length === 0, so this is normally a true cold launch and the
+  // welcome copy above already says everything that needs saying — no need for an extra empty-
+  // state box under it. renderLandingScreen() (the Home button) is the one path that forces this
+  // screen open regardless of count; when it does that with existing projects, this is what
+  // actually shows them instead of leaving the crew on a screen with nowhere to display the list.
   if (!el) return;
   if (!projects.length) {
-    el.innerHTML = '<div class="empty-projects"><strong>No projects yet</strong>Create a project to start capturing field data</div>';
+    el.style.display = 'none';
+    el.innerHTML = '';
     return;
   }
+  el.style.display = '';
   el.innerHTML = projects.slice().reverse().map(p=>{
     const d = projectData[p.id] || {savedFeatures:[]};
     const nF = (d.savedFeatures||[]).length;
