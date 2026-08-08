@@ -1,172 +1,145 @@
-// plotedge-sw.js — PlotEdge's actual service worker.
-//
-// REBUILT FROM SPEC, NOT RECOVERED. The file that used to live at this path had been silently
-// overwritten by an older copy of .github/workflows/build-apk.yml (a save that went to the wrong
-// filename at some point) — no service worker code was running at all; registration was failing
-// on a parse error and the .catch(()=>{}) next to it was swallowing that silently. There was no
-// git history to recover it from, so this is a from-scratch rebuild against the behavior index.html
-// and DEPLOY.md already document elsewhere in this project:
-//   - "network-first for the shell, so a fresh deploy is fetched on the very next load rather than
-//     served from cache" (index.html, SERVICE WORKER + UPDATE DETECTION comment)
-//   - "cache: 'no-store' in the service worker's fetch handler, updateViaCache:'none' on
-//     registration" (DEPLOY.md)
-//   - "areas already viewed ... so they still show up offline" for the Review map's basemap tiles
-//     (index.html, ensureReviewMap offline banner)
-//   - relative paths throughout, so this keeps working when deployed to a GitHub Pages subpath
-//     rather than a domain root (DEPLOY.md, "subpath vs. root")
+#!/usr/bin/env python3
+"""
+Inject the runtime permissions PlotEdge needs into the AndroidManifest.xml that
+`npx cap add android` generates.
 
-const SW_VERSION = 'v2';   // bumped: the shell cache list changed when the app was split
-const SHELL_CACHE = `plotedge-shell-${SW_VERSION}`;
-const TILE_CACHE = `plotedge-tiles-${SW_VERSION}`;
+The default Capacitor manifest only declares INTERNET. Android will not show a
+permission toggle in Settings -> Apps -> PlotEdge -> Permissions for anything
+that is not declared here, and requestPermissions() for an undeclared
+permission is auto-denied without ever showing a prompt. That is why GPS and
+camera silently fail in the APK while working fine in the browser.
 
-// Resolved against the SW's own scope (not '/') so this keeps working whether PlotEdge is served
-// from a domain root or a GitHub Pages subpath like /plotedge/ — an absolute '/index.html' would
-// 404 under a subpath.
-//
-// ══ THE APP IS NO LONGER ONE FILE ══
-// index.html used to carry the whole stylesheet and application inline, so caching it cached
-// everything. Now it is a shell that pulls in css/ and js/, and caching only the shell would give
-// an offline launch a blank, unstyled page — the worst possible failure for a field app, because
-// it looks like data loss. Every file index.html references is listed here.
-// Keep this in step with the <link> and <script> tags: tests/split.test.js fails the build if they
-// ever disagree.
-const APP_ASSETS = [
-  'css/01-tokens.css',
-  'css/02-mesh.css',
-  'css/03-base.css',
-  'css/04-screens.css',
-  'css/05-components.css',
-  'js/01-theme-and-settings.js',
-  'js/02-state.js',
-  'js/03-schema.js',
-  'js/04-store.js',
-  'js/05-projects.js',
-  'js/06-collect.js',
-  'js/07-navigation.js',
-  'js/08-gps.js',
-  'js/09-geometry.js',
-  'js/10-photos.js',
-  'js/11-features.js',
-  'js/11a-attr-query.js',
-  'js/12-review.js',
-  'js/13-dashboard.js',
-  'js/14-map.js',
-  'js/15-plotetch.js',
-  'js/16-geometry-math.js',
-  'js/17-export.js',
-  'js/18-import.js',
-  'js/19-sync.js',
-  'js/20-ui-feedback.js',
-  'js/21-webmap.js',
-  'js/22-boot.js',
-];
+Safe to run more than once - it skips anything already present.
+"""
 
-const SHELL_URLS = [
-  new URL('./', self.registration.scope).href,
-  new URL('./index.html', self.registration.scope).href,
-  new URL('./plotedge.manifest.json', self.registration.scope).href,
-  ...APP_ASSETS.map((p) => new URL('./' + p, self.registration.scope).href),
-];
+import pathlib
+import sys
 
-// The two raster tile sources the Review map (and the PDF map-layout export) pull from — see
-// reviewMapStreetLayer/reviewMapSatelliteLayer and mapLayoutTileUrl() in index.html. Recognizing
-// these by host+path is what lets the fetch handler treat "map imagery" differently from
-// "app shell": tiles are cached opportunistically and never block on the network, the shell is
-// always network-first.
-function isTileRequest(url) {
-  return (
-    (url.hostname.endsWith('.tile.openstreetmap.org')) ||
-    (url.hostname === 'server.arcgisonline.com' && url.pathname.includes('/World_Imagery/MapServer/tile/'))
-  );
+MANIFEST = pathlib.Path("android/app/src/main/AndroidManifest.xml")
+
+PERMISSIONS = [
+    # navigator.geolocation (WebView geolocation prompt -> Capacitor asks for these two)
+    "android.permission.ACCESS_FINE_LOCATION",
+    "android.permission.ACCESS_COARSE_LOCATION",
+    # getUserMedia({video}) for the barcode scanner, and <input capture="environment">
+    "android.permission.CAMERA",
+    # getUserMedia({audio}) for voice notes
+    "android.permission.RECORD_AUDIO",
+    "android.permission.MODIFY_AUDIO_SETTINGS",
+    # Exports are written to Documents/PlotEdge via @capacitor/filesystem so the crew can
+    # actually find them in a file manager. On API 28 and below that needs an explicit write
+    # permission -- without it the write fails and the export silently produces nothing, which
+    # is the failure this app already shipped once. maxSdkVersion is applied below: from API 29
+    # scoped storage covers Documents without any permission at all, and leaving an unbounded
+    # WRITE_EXTERNAL_STORAGE in the manifest gets the app flagged on newer targets.
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+    "android.permission.READ_EXTERNAL_STORAGE",
+]
+
+# Permissions that only apply to older API levels. Kept separate from PERMISSIONS above because
+# they need the maxSdkVersion attribute, not a bare name.
+PERMISSION_MAX_SDK = {
+    "android.permission.WRITE_EXTERNAL_STORAGE": "28",
+    "android.permission.READ_EXTERNAL_STORAGE": "32",
 }
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(SHELL_CACHE)
-      .then((cache) => cache.addAll(SHELL_URLS))
-      // Take over from any previously-waiting SW immediately rather than waiting for every open
-      // tab to close first — index.html's controllerchange handler is what actually reloads open
-      // tabs, on a short delay so a brand-new install doesn't trigger a pointless reload of itself.
-      .then(() => self.skipWaiting())
-  );
-});
+# required="false" so the Play Store / sideload never filters the app off a
+# device that happens to be missing the hardware.
+FEATURES = [
+    "android.hardware.camera",
+    "android.hardware.location.gps",
+]
 
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys()
-      .then((names) => Promise.all(
-        names
-          .filter((name) => name !== SHELL_CACHE && name !== TILE_CACHE)
-          .map((name) => caches.delete(name))
-      ))
-      .then(() => self.clients.claim())
-  );
-});
 
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
-  if (req.method !== 'GET') return; // never intercept POSTs etc. (e.g. optional backup/tagging endpoints)
+def patch_backup_attrs(xml: str) -> str:
+    """
+    Force android:allowBackup="true" (and the Android 12+ equivalent) on the
+    <application> tag. Set explicitly rather than relying on the platform
+    default, because the default flipped between target SDK levels and the
+    generated manifest does not pin it either way.
+    """
+    import re as _re
 
-  const url = new URL(req.url);
+    m = _re.search(r"<application\b[^>]*>", xml)
+    if not m:
+        print("  WARNING: no <application> tag; skipping backup attributes")
+        return xml
+    tag = m.group(0)
+    new_tag = tag
+    for attr, value in (
+        ("android:allowBackup", "true"),
+        ("android:fullBackupOnly", "true"),
+    ):
+        if attr in new_tag:
+            new_tag = _re.sub(
+                rf'{attr}="[^"]*"', f'{attr}="{value}"', new_tag
+            )
+            print(f"  updating: {attr}=\"{value}\"")
+        else:
+            new_tag = new_tag[:-1].rstrip() + f' {attr}="{value}">'
+            print(f"  adding: {attr}=\"{value}\"")
+    return xml.replace(tag, new_tag, 1)
 
-  if (isTileRequest(url)) {
-    event.respondWith(handleTileRequest(req));
-    return;
-  }
 
-  // Same-origin app-shell requests: HTML/JS/CSS/manifest, i.e. everything this app itself serves.
-  // Cross-origin, non-tile requests (Nominatim geocoding, the optional photo-recognition/backup
-  // endpoints, published web-map pushes to api.github.com, etc.) are left completely alone — they
-  // need a live network round trip to mean anything, and caching them would be actively wrong.
-  if (url.origin === self.location.origin) {
-    event.respondWith(handleShellRequest(req));
-  }
-});
+def main() -> int:
+    if not MANIFEST.exists():
+        print(f"ERROR: {MANIFEST} not found - run this after `npx cap add android`.")
+        return 1
 
-// Network-first, falling back to cache only when actually offline — this is the behavior that
-// makes "push new files, reload within a minute, see the change" true (DEPLOY.md's own test
-// steps). cache:'no-store' on the fetch itself means this never gets short-circuited by the HTTP
-// cache sitting in between the SW and the network, on top of the no-store already being enforced
-// by updateViaCache:'none' at the registration layer in index.html.
-async function handleShellRequest(req) {
-  try {
-    const fresh = await fetch(req, { cache: 'no-store' });
-    if (fresh && fresh.ok) {
-      const cache = await caches.open(SHELL_CACHE);
-      cache.put(req, fresh.clone());
-    }
-    return fresh;
-  } catch (err) {
-    const cached = await caches.match(req, { ignoreSearch: true });
-    if (cached) return cached;
-    // Last resort for a bare navigation with nothing cached yet (e.g. first-ever load happened
-    // offline, which can't really happen, but a partial/corrupted install shouldn't hard-fail a
-    // navigation either) — hand back the app shell itself rather than a bare network error.
-    if (req.mode === 'navigate') {
-      const shell = await caches.match(new URL('./index.html', self.registration.scope).href);
-      if (shell) return shell;
-    }
-    throw err;
-  }
-}
+    xml = MANIFEST.read_text(encoding="utf-8")
 
-// Cache-first, refreshed in the background — the opposite priority from the shell, deliberately.
-// A basemap tile doesn't change under you the way app code does, and a field crew panning across
-// an area they already loaded needs it to appear instantly and work with no signal, not to wait
-// on a network round trip that may never complete. A failed fetch (offline, tile server down) just
-// leaves the tile cache as-is; Leaflet already handles a missing tile as a transparent gap rather
-// than an error, so nothing here needs to synthesize a placeholder image.
-async function handleTileRequest(req) {
-  const cache = await caches.open(TILE_CACHE);
-  const cached = await cache.match(req);
-  const network = fetch(req).then((res) => {
-    if (res && res.ok) cache.put(req, res.clone());
-    return res;
-  }).catch(() => undefined);
-  if (cached) {
-    network; // let it refresh the cache in the background; the caller doesn't wait on it
-    return cached;
-  }
-  const fresh = await network;
-  return fresh || Response.error();
-}
+    additions = []
+    for perm in PERMISSIONS:
+        if perm in xml:
+            print(f"  already present: {perm}")
+            continue
+        max_sdk = PERMISSION_MAX_SDK.get(perm)
+        if max_sdk:
+            additions.append(
+                f'    <uses-permission android:name="{perm}" android:maxSdkVersion="{max_sdk}" />'
+            )
+            print(f"  adding: {perm} (maxSdkVersion={max_sdk})")
+        else:
+            additions.append(f'    <uses-permission android:name="{perm}" />')
+            print(f"  adding: {perm}")
+
+    for feat in FEATURES:
+        if feat in xml:
+            print(f"  already present: {feat}")
+            continue
+        additions.append(
+            f'    <uses-feature android:name="{feat}" android:required="false" />'
+        )
+        print(f"  adding: {feat} (required=false)")
+
+    # ══ AUTO-BACKUP ══
+    # All captured data lives in the WebView's localStorage, i.e. inside the app
+    # data directory. Android's Auto Backup / device-transfer will carry that
+    # directory to a new phone or restore it after a factory reset, but ONLY if
+    # allowBackup is on. Capacitor's generated manifest leaves it unset, so a
+    # crew changing devices silently starts from nothing. This is a second line
+    # of defence behind the in-app backup file, not a replacement for it — a
+    # sideloaded APK is not restored by Play, so the export is still the copy
+    # that matters most.
+    xml = patch_backup_attrs(xml)
+
+    if not additions:
+        print("Backup attributes checked; nothing else to do.")
+        MANIFEST.write_text(xml, encoding="utf-8")
+        return 0
+
+    if "</manifest>" not in xml:
+        print("ERROR: no closing </manifest> tag - manifest looks malformed.")
+        return 1
+
+    block = "\n    <!-- PlotEdge hardware permissions (injected at build time) -->\n"
+    block += "\n".join(additions) + "\n"
+
+    xml = xml.replace("</manifest>", block + "</manifest>", 1)
+    MANIFEST.write_text(xml, encoding="utf-8")
+    print(f"Patched {MANIFEST}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
