@@ -480,42 +480,62 @@ function updateCapturePhotoBadge(){
 // but the listeners live on the stable parent container). A left swipe past the threshold commits
 // the same delete as the × button, which already opens the Undo toast — so swiping is just a
 // faster one-handed way to trigger the exact same soft-delete flow.
+// ══ WHY THIS IGNORES THE SCREEN EDGES ══
+// Android's system Back is an inward edge swipe, and from the right edge that is a leftward
+// drag — the identical motion to swipe-to-delete. Performed over the vertex list it armed and
+// committed a delete, which is why going Back "undid" a capture. Worse, the gesture that the
+// system claims ends in `touchcancel`, and touchcancel was wired to the same finish() as
+// touchend — so the delete fired on precisely the presses where the user was navigating, not
+// deleting. Two rules fix it: a gesture that begins in either edge gutter belongs to the OS and
+// is never ours, and a cancelled gesture is a cancellation, never a commit.
+const SWIPE_EDGE_GUTTER_PX = 32;   // a little wider than Android's own ~24dp back-gesture inset
+
 function attachSwipeToDelete(containerId, itemSelector, onDelete){
   const container = document.getElementById(containerId);
   if (!container || container._swipeAttached) return;
   container._swipeAttached = true;
-  const THRESHOLD = 72;
+  const THRESHOLD = 96;   // raised: a deliberate flick, not a drifted scroll
   let el=null, startX=0, startY=0, dx=0, dragging=false;
+  const reset = () => {
+    if (el){ el.style.transition = ''; el.style.transform = ''; el.style.opacity = ''; el.classList.remove('swipe-armed'); }
+    el = null; dragging = false; dx = 0;
+  };
   container.addEventListener('touchstart', e=>{
     const item = e.target.closest(itemSelector);
     if (!item || e.target.closest('button,input,a')) { el=null; return; }
-    el = item; startX = e.touches[0].clientX; startY = e.touches[0].clientY; dx=0; dragging=false;
+    const x = e.touches[0].clientX;
+    // Started in the OS gesture gutter — this stroke is a navigation, so take no part in it.
+    if (x <= SWIPE_EDGE_GUTTER_PX || x >= (window.innerWidth - SWIPE_EDGE_GUTTER_PX)) { el=null; return; }
+    el = item; startX = x; startY = e.touches[0].clientY; dx=0; dragging=false;
   }, {passive:true});
   container.addEventListener('touchmove', e=>{
     if (!el) return;
     const t = e.touches[0];
     const mdx = t.clientX-startX, mdy = t.clientY-startY;
-    if (!dragging && Math.abs(mdx) > Math.abs(mdy) && Math.abs(mdx) > 8) dragging = true;
+    // Must be decisively horizontal (not merely more horizontal than vertical) before the row
+    // starts moving, so a thumb scrolling a long vertex list never drifts into an armed delete.
+    if (!dragging && mdx < -12 && Math.abs(mdx) > Math.abs(mdy) * 2) dragging = true;
     if (!dragging) return;
     dx = Math.min(0, Math.max(mdx, -140));
     el.style.transition = 'none';
     el.style.transform = `translateX(${dx}px)`;
     el.classList.toggle('swipe-armed', dx <= -THRESHOLD);
   }, {passive:true});
-  const finish = () => {
+  container.addEventListener('touchend', () => {
     if (!el) return;
-    el.style.transition = '';
     if (dragging && dx <= -THRESHOLD){
       const idx = parseInt(el.getAttribute('data-idx'), 10);
-      el.style.transform = 'translateX(-100%)';
-      el.style.opacity = '0';
+      const row = el;
+      row.style.transition = '';
+      row.style.transform = 'translateX(-100%)';
+      row.style.opacity = '0';
+      el = null; dragging = false; dx = 0;
       setTimeout(()=> onDelete(idx), 140);
-    } else {
-      el.style.transform = '';
-      el.classList.remove('swipe-armed');
+      return;
     }
-    el = null; dragging = false; dx = 0;
-  };
-  container.addEventListener('touchend', finish);
-  container.addEventListener('touchcancel', finish);
+    reset();
+  });
+  // Cancelled, not completed. The OS took the gesture (back swipe, notification pull, incoming
+  // call); the row goes back where it was and nothing is deleted.
+  container.addEventListener('touchcancel', reset);
 }
