@@ -47,6 +47,7 @@ const APP_ASSETS = [
   'js/09-geometry.js',
   'js/10-photos.js',
   'js/11-features.js',
+  'js/11a-attr-query.js',
   'js/12-review.js',
   'js/13-dashboard.js',
   'js/14-map.js',
