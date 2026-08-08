@@ -119,6 +119,68 @@ if (i === -1 || j === -1) {
     assert(after.data.p1.savedFeatures.length === 1, 'captured features were wiped by a non-destructive save');
   });
 
+  // ══ THE FIELD BUG: FINISHING A SHAPE IS NOT DATA LOSS ══
+  // The guard used to count savedFeatures + currentVertices as one total. Finishing a polygon
+  // moves N vertices out of the scratch list into a single saved feature, so the total fell and
+  // the write was refused — the feature stayed in memory, never reached disk, and the next launch
+  // reported an empty project. These four cover every shape of that mistake.
+  const inProgressStore = (nVerts) => JSON.stringify({
+    projects: [{ id: 'p1', name: 'Survey A' }],
+    data: { p1: {
+      savedFeatures: [],
+      currentVertices: Array.from({ length: nVerts }, (_, i) => ({ lat: i, lon: i })),
+      featureTypes: []
+    } }
+  });
+
+  check('finishing a polygon is saved, not refused as "dropping captured items"', () => {
+    const { ctx, ls } = boot({ plotedge_v2: inProgressStore(5) });
+    ctx.projectData = ctx.loadStore();
+    // exactly what finalizeSaveFeature does: five scratch vertices become one saved feature
+    ctx.projectData.p1.savedFeatures = [{ id: 'f1', name: 'Plot 12', vertices: ctx.projectData.p1.currentVertices }];
+    ctx.projectData.p1.currentVertices = [];
+    const ok = ctx.persistStore();
+    assert(ok !== false, 'the save was refused');
+    const after = JSON.parse(ls._m.get('plotedge_v2'));
+    assert(after.data.p1.savedFeatures.length === 1, 'the finished polygon never reached disk');
+    assert(after.data.p1.savedFeatures[0].name === 'Plot 12', 'the saved feature lost its name');
+  });
+
+  check('clearing the in-progress form is saved, not refused', () => {
+    const { ctx, ls } = boot({ plotedge_v2: inProgressStore(3) });
+    ctx.projectData = ctx.loadStore();
+    ctx.projectData.p1.currentVertices = [];      // Clear current / Cancel edit
+    const ok = ctx.persistStore();
+    assert(ok !== false, 'clearing the scratch vertices was refused as data loss');
+    assert(JSON.parse(ls._m.get('plotedge_v2')).data.p1.currentVertices.length === 0, 'the clear did not persist');
+  });
+
+  check('editing a feature down to fewer vertices still saves', () => {
+    const seed = JSON.stringify({
+      projects: [{ id: 'p1', name: 'Survey A' }],
+      data: { p1: { savedFeatures: [{ id: 'f1', vertices: [{lat:1,lon:1},{lat:2,lon:2},{lat:3,lon:3},{lat:4,lon:4}] }], currentVertices: [], featureTypes: [] } }
+    });
+    const { ctx, ls } = boot({ plotedge_v2: seed });
+    ctx.projectData = ctx.loadStore();
+    ctx.projectData.p1.savedFeatures[0].vertices = [{lat:1,lon:1},{lat:2,lon:2},{lat:3,lon:3}];
+    const ok = ctx.persistStore();
+    assert(ok !== false, 'removing a mis-shot vertex from a saved feature was refused');
+    assert(JSON.parse(ls._m.get('plotedge_v2')).data.p1.savedFeatures[0].vertices.length === 3, 'the edit did not persist');
+  });
+
+  check('losing a whole saved feature is still blocked', () => {
+    // The protection that matters must survive the fix above: the guard still has to catch a
+    // save that would make a completed feature disappear without an explicit delete.
+    const { ctx, ls } = boot({ plotedge_v2: goodStore() });
+    ctx.projectData = ctx.loadStore();
+    ctx.projectData.p1.savedFeatures = [];
+    ctx.projectData.p1.currentVertices = [{ lat: 9, lon: 9 }, { lat: 8, lon: 8 }];  // scratch must not mask it
+    ctx.persistStore();
+    const after = JSON.parse(ls._m.get('plotedge_v2'));
+    assert(after.data.p1.savedFeatures.length === 1,
+      'a completed feature was wiped by a non-destructive save, masked by scratch vertices');
+  });
+
   // ── rolling backup + recovery ────────────────────────────────────────────
   check('every successful save leaves a restorable previous copy behind', () => {
     const { ctx, ls } = boot({ plotedge_v2: goodStore() });
