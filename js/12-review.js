@@ -146,10 +146,19 @@ function renderAttributeTable(){
   const scroll = document.getElementById('attrTableScroll');
   const countEl = document.getElementById('attrTableCount');
   if (!scroll) return;
-  const features = getFilteredFeatures();
-  if (countEl) countEl.textContent = `${features.length} feature${features.length===1?'':'s'} · ${savedFeatures.length} in project`;
+  // The query and the "show selected only" toggle sit on top of the search/type/validation
+  // filters rather than replacing them, so every control on the tab composes. See
+  // applyAttrQueryFilter() in js/23-attr-query.js.
+  const base = getFilteredFeatures();
+  const features = (typeof applyAttrQueryFilter === 'function') ? applyAttrQueryFilter(base) : base;
+  if (countEl) {
+    const q = (typeof attrQueryActive === 'function' && attrQueryActive()) ? ' · filtered by query' : '';
+    countEl.textContent = `${features.length} feature${features.length===1?'':'s'} · ${savedFeatures.length} in project${q}`;
+  }
+  if (typeof updateAttrQueryBar === 'function') updateAttrQueryBar();
+  if (typeof updateAttrSelectionBar === 'function') updateAttrSelectionBar();
   if (!features.length){
-    scroll.innerHTML = '<div class="attr-table-empty">Nothing to show. Adjust the search or type filter.</div>';
+    scroll.innerHTML = '<div class="attr-table-empty">Nothing to show. Adjust the search, the type filter, or the query.</div>';
     return;
   }
   const cols = attrTableColumns(features);
@@ -170,8 +179,14 @@ function renderAttributeTable(){
   const head = cols.map(c=>{
     const sorted = attrSortKey === c.key;
     const arrow = sorted ? (attrSortDir === 1 ? '▲' : '▼') : '▲';
-    return `<th class="${sorted?'sorted':''}" onclick="sortAttributeTable('${escapeHtml(c.key)}')" title="Sort by ${escapeHtml(c.label)}">${escapeHtml(c.label)}<span class="attr-sort">${arrow}</span></th>`;
+    // Tap sorts; long-press opens that column's statistics (count/min/max/mean, or the value
+    // counts for a text column). A stats button per header would have cost width the table
+    // cannot spare on a phone.
+    return `<th class="${sorted?'sorted':''}" onclick="sortAttributeTable('${escapeHtml(c.key)}')"
+      oncontextmenu="event.preventDefault();showAttrColumnStats('${escapeHtml(c.key)}')"
+      title="Tap to sort by ${escapeHtml(c.label)}, long-press for statistics">${escapeHtml(c.label)}<span class="attr-sort">${arrow}</span></th>`;
   }).join('');
+  const selHead = `<th class="attr-sel-col" title="Select rows"></th>`;
   const body = rows.map(f=>{
     const cells = cols.map((c,i)=>{
       const txt = attrCellText(c, f);
@@ -182,12 +197,18 @@ function renderAttributeTable(){
       if (c.key === '__acc' && txt !== null) flag = `<span class="attr-flag ${parseFloat(txt) > 5 ? 'warn':'ok'}"></span>`;
       return `<td class="${cls}">${flag}${txt === null ? '—' : escapeHtml(txt)}</td>`;
     }).join('');
+    const picked = (typeof attrSelection !== 'undefined') && attrSelection.has(f.id);
+    // The checkbox is its own cell and stops propagation, so selecting a row for a bulk action is
+    // a separate gesture from tapping the row to drive the map — the same separation QGIS keeps
+    // between a selection and the current feature.
+    const selCell = `<td class="attr-sel-col" onclick="toggleAttrSelect(${JSON.stringify(f.id)}, event)">
+      <span class="attr-sel-box${picked?' on':''}" role="checkbox" aria-checked="${picked?'true':'false'}">${picked?'✓':''}</span></td>`;
     // Single tap keeps its existing job (select + drive the map); double-tap opens the full
     // record. Adding an extra column of buttons would have cost horizontal room the table can't
     // spare on a phone.
-    return `<tr class="${attrSelectedId === f.id ? 'selected':''}" onclick="selectAttrRow(${JSON.stringify(f.id)})" ondblclick="openInspect(${JSON.stringify(f.id)})" title="Double-tap for full details">${cells}</tr>`;
+    return `<tr class="${attrSelectedId === f.id ? 'selected':''}${picked?' picked':''}" onclick="selectAttrRow(${JSON.stringify(f.id)})" ondblclick="openInspect(${JSON.stringify(f.id)})" title="Double-tap for full details">${selCell}${cells}</tr>`;
   }).join('');
-  scroll.innerHTML = `<table class="attr-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  scroll.innerHTML = `<table class="attr-table"><thead><tr>${selHead}${head}</tr></thead><tbody>${body}</tbody></table>`;
 }
 
 // Row selection drives the map, the way clicking a row in QGIS's attribute table does: the map
@@ -210,7 +231,10 @@ function selectAttrRow(id){
 // Copy as TSV — pastes straight into Excel/Sheets as a real grid. Useful mid-job when someone
 // wants a quick tally in a spreadsheet without running the full export.
 function copyAttributeTable(){
-  const features = getFilteredFeatures();
+  // Copies what is on screen, query and selection included — copying the unfiltered project
+  // after deliberately narrowing to eleven rows would be actively misleading.
+  const base = getFilteredFeatures();
+  const features = (typeof applyAttrQueryFilter === 'function') ? applyAttrQueryFilter(base) : base;
   if (!features.length){ showToast('Nothing to copy'); return; }
   const cols = attrTableColumns(features);
   const esc = v => String(v ?? '').replace(/[\t\r\n]+/g,' ');
