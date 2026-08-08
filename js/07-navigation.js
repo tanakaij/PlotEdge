@@ -389,6 +389,15 @@ function closeTopOverlay(){
   if (isReallyOpen(manualCoordModal)) { closeManualCoordEntry(); return true; }
   const featureTypePickerModal = document.getElementById('featureTypePickerModal');
   if (isReallyOpen(featureTypePickerModal)) { closeFeatureTypePicker(); return true; }
+  // Stats is opened from a header inside the table; the query sheet is opened from the bar above
+  // it. Neither can be open at the same time as the other, but stats is listed first so that if
+  // they ever are, the inner one closes first — same rule as Quick Notes above.
+  const attrStatsModal = document.getElementById('attrStatsModal');
+  if (isReallyOpen(attrStatsModal)) { closeAttrStats(); return true; }
+  // Back leaves the typed expression in place rather than discarding it, matching the attribute
+  // sheet above: losing a half-written query on a stray Back is the worse outcome.
+  const attrQueryModal = document.getElementById('attrQueryModal');
+  if (isReallyOpen(attrQueryModal)) { closeAttrQuery(); return true; }
   const settingsModal = document.getElementById('settingsModal');
   if (isReallyOpen(settingsModal)) { closeSettings(); return true; }
   const customizeModal = document.getElementById('customizeQaModal');
