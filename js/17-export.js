@@ -10,13 +10,171 @@
 // ══ EXPORT ══
 function ts(){return new Date().toISOString().slice(0,16).replace('T','_').replace(':','-');}
 
-function dl(content,name,mime){
-  const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(new Blob([content],{type:mime})),download:name});
-  a.click(); URL.revokeObjectURL(a.href);
+// ══════════════════════════════════════════════════════════════════════════════
+// WRITING A FILE TO THE DEVICE
+// ══════════════════════════════════════════════════════════════════════════════
+// Every export in this file used to end at:
+//
+//   const a = Object.assign(document.createElement('a'), {href: blobUrl, download: name});
+//   a.click(); URL.revokeObjectURL(a.href);
+//
+// which produces no file at all inside the Android APK. A Capacitor WebView has no download
+// manager attached, so `download` is inert — the click is accepted, nothing is written, and the
+// export reports success. That is why exported projects could not be found in Documents or
+// anywhere else, and why there was never anything to import back.
+//
+// The same two lines are also wrong in a real browser: revokeObjectURL() runs synchronously in
+// the same tick as click(), which can invalidate the URL before the browser has finished reading
+// it, and Firefox ignores an anchor that was never inserted into the document.
+//
+// So: on a native build, write through Capacitor's Filesystem plugin into Documents/PlotEdge and
+// TELL THE USER THE PATH — an export whose location is a mystery is barely better than one that
+// never happened. On the web, do the anchor properly. Either way the caller gets a promise that
+// resolves to a human-readable description of where the bytes went, or null if they did not go.
+const EXPORT_DIR = 'PlotEdge';
+
+function capPlugin(name){
+  try {
+    if (!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) return null;
+    return (window.Capacitor.Plugins && window.Capacitor.Plugins[name]) || null;
+  } catch(e) { return null; }
+}
+
+// Filesystem.writeFile wants base64 for binary data. Everything the exports produce is either a
+// string, a Uint8Array/ArrayBuffer (GeoPackage, FlatGeobuf, Parquet, XLSX) or a Blob (the zips),
+// so this normalises all three. FileReader is used rather than btoa(String.fromCharCode(...)),
+// which blows the call-stack argument limit on anything more than a few hundred KB — and a
+// GeoPackage with embedded photos is routinely tens of megabytes.
+function toBase64(content, mime){
+  return new Promise((resolve, reject) => {
+    let blob;
+    if (content instanceof Blob) blob = content;
+    else blob = new Blob([content], { type: mime || 'application/octet-stream' });
+    const r = new FileReader();
+    r.onload = () => {
+      const s = String(r.result || '');
+      const comma = s.indexOf(',');
+      resolve(comma === -1 ? s : s.slice(comma + 1));
+    };
+    r.onerror = () => reject(r.error || new Error('could not read data for writing'));
+    r.readAsDataURL(blob);
+  });
+}
+
+// True when the app can write real files to the device filesystem. Used to word the UI honestly
+// rather than promising a "download" that the platform cannot perform.
+function canWriteDeviceFiles(){ return !!capPlugin('Filesystem'); }
+
+async function saveExportFile(content, name, mime){
+  const Filesystem = capPlugin('Filesystem');
+  if (Filesystem && Filesystem.writeFile) {
+    const data = await toBase64(content, mime);
+    // Documents is the directory a file manager actually shows the user. ExternalStorage is the
+    // fallback for older devices where Documents is not addressable; Data is the last resort —
+    // it is app-private (and wiped on uninstall), so it is only ever used to avoid failing
+    // outright, and the returned label says so.
+    const targets = [
+      { dir: 'DOCUMENTS',        label: 'Documents/' + EXPORT_DIR },
+      { dir: 'EXTERNAL_STORAGE', label: 'Storage/' + EXPORT_DIR },
+      { dir: 'DATA',             label: 'app storage (use Share to move it out)' }
+    ];
+    let lastErr = null;
+    for (const t of targets) {
+      try {
+        if (Filesystem.mkdir) {
+          // Already-exists is the normal case, not a failure.
+          try { await Filesystem.mkdir({ path: EXPORT_DIR, directory: t.dir, recursive: true }); } catch(e) {}
+        }
+        const res = await Filesystem.writeFile({
+          path: EXPORT_DIR + '/' + name,
+          data,
+          directory: t.dir,
+          recursive: true
+        });
+        return { ok: true, where: t.label + '/' + name, uri: (res && res.uri) || null, native: true };
+      } catch(e) { lastErr = e; }
+    }
+    console.warn('PlotEdge: device write failed', lastErr);
+    return { ok: false, where: null, uri: null, native: true, error: lastErr };
+  }
+
+  // Browser / PWA path.
+  try {
+    const blob = content instanceof Blob ? content : new Blob([content], { type: mime || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name; a.rel = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);          // Firefox ignores an anchor outside the document
+    a.click();
+    // Long enough for the browser to have taken its own reference to the blob. Revoking in the
+    // same tick as click() is what truncated large exports.
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 30000);
+    return { ok: true, where: 'your Downloads folder', uri: null, native: false };
+  } catch(e) {
+    console.warn('PlotEdge: download failed', e);
+    return { ok: false, where: null, uri: null, native: false, error: e };
+  }
 }
 
 
-function exportGeoJSON(){
+// Offers the OS share sheet for a file just written natively, so it can be sent to Drive, email,
+// or a laptop without the user having to go hunting through a file manager first. Silently does
+// nothing where the plugin isn't present — sharing is a convenience, never the delivery mechanism.
+async function offerShareFile(uri, title){
+  const Share = capPlugin('Share');
+  if (!Share || !Share.share || !uri) return false;
+  try { await Share.share({ title: title || 'PlotEdge export', url: uri, dialogTitle: 'Send export' }); return true; }
+  catch(e) { return false; }
+}
+
+
+// Reports where the file landed, in the one place the user is already looking. Kept in a single
+// function so every export format says the same thing the same way — the old code had each
+// export inventing its own wording, and none of them said where anything went.
+function noteExportSaved(res, name){
+  const status = document.getElementById('exportStatus');
+  if (!res || !res.ok) {
+    const msg = 'Could not write "' + name + '" to this device.';
+    if (status) status.textContent = '✕ ' + msg;
+    showToast(msg + ' Check storage permission and free space.');
+    return false;
+  }
+  const msg = 'Saved "' + name + '" to ' + res.where;
+  if (status) status.textContent = '✓ ' + msg;
+  showToast(msg);
+  _lastExportUri = res.uri || null;
+  _lastExportName = name;
+  updateShareLastExportBtn();
+  return true;
+}
+
+let _lastExportUri = null, _lastExportName = '';
+
+function updateShareLastExportBtn(){
+  const btn = document.getElementById('shareLastExportBtn');
+  if (!btn) return;
+  btn.style.display = _lastExportUri ? '' : 'none';
+  const lbl = document.getElementById('shareLastExportLabel');
+  if (lbl) lbl.textContent = 'Send "' + _lastExportName + '"…';
+}
+
+function shareLastExport(){
+  if (!_lastExportUri){ showToast('Nothing exported yet in this session'); return; }
+  offerShareFile(_lastExportUri, _lastExportName).then(ok=>{
+    if (!ok) showToast('Sharing is not available on this device — the file is already saved.');
+  });
+}
+
+
+// Kept so the many existing call sites read the same, but it is now a real write with a real
+// answer rather than a click into the void.
+function dl(content,name,mime){
+  return saveExportFile(content,name,mime).then(res => { noteExportSaved(res, name); return res; });
+}
+
+
+async function exportGeoJSON(){
   if(!savedFeatures.length){showToast('No features to export');return;}
   const byType={}; const typeLabels={};
   savedFeatures.forEach(f=>{
@@ -25,19 +183,32 @@ function exportGeoJSON(){
     typeLabels[key]=info.label;
     (byType[key]=byType[key]||[]).push(f);
   });
-  const types=Object.keys(byType); const stamp=ts(); let i=0;
-  const next=()=>{
-    if(i>=types.length){
-      document.getElementById('exportStatus').textContent=`✓ ${types.length} GeoJSON file${types.length>1?'s':''} downloaded`;
-      showToast(`${types.length} GeoJSON file${types.length>1?'s':''} downloaded`); markProjectExported(); return;
-    }
-    const key=types[i++]; const label=typeLabels[key];
+  const types=Object.keys(byType); const stamp=ts();
+  const status=document.getElementById('exportStatus');
+  if(types.length>1 && status) status.textContent=`Saving ${types.length} files…`;
+  // Awaited one at a time rather than fired on a 650ms timer. The timer existed to space out
+  // browser downloads, but it also meant the "✓ done" message was written before the writes had
+  // finished — and on a native build, before they had even been attempted. Now the summary is
+  // only shown once every file has genuinely been written, and a failure is reported as one.
+  let written=0, lastRes=null, lastName='';
+  for(const key of types){
+    const label=typeLabels[key];
     const fc={type:'FeatureCollection',name:label,features:byType[key].flatMap(f=>geoJSONFeaturesFor(f,label))};
-    dl(JSON.stringify(fc,null,2),`${label.replace(/\s+/g,'_')}_${stamp}.geojson`,'application/json');
-    setTimeout(next,650);
-  };
-  next();
-  if(types.length>1) document.getElementById('exportStatus').textContent=`Downloading ${types.length} files…`;
+    const name=`${label.replace(/\s+/g,'_')}_${stamp}.geojson`;
+    const res=await saveExportFile(JSON.stringify(fc,null,2),name,'application/json');
+    if(res.ok){ written++; lastRes=res; lastName=name; }
+    // Browsers throttle back-to-back downloads; a native write has no such limit.
+    if(!res.native && types.length>1) await new Promise(r=>setTimeout(r,650));
+  }
+  if(!written){ noteExportSaved({ok:false}, 'GeoJSON'); return; }
+  if(written===1 && lastRes){ noteExportSaved(lastRes, lastName); }
+  else {
+    const where=lastRes?lastRes.where.replace(/\/[^/]*$/,''):'this device';
+    if(status) status.textContent=`✓ ${written} GeoJSON file${written>1?'s':''} saved to ${where}`;
+    showToast(`${written} GeoJSON file${written>1?'s':''} saved to ${where}`);
+    _lastExportUri=lastRes?lastRes.uri:null; _lastExportName=lastName; updateShareLastExportBtn();
+  }
+  markProjectExported();
 }
 
 
@@ -170,28 +341,44 @@ function exportCSV(){
   if(!savedFeatures.length){showToast('No features to export');return;}
   const csv=buildCSVString();
   const total=savedFeatures.reduce((s,f)=>s+(f.vertices||[]).length,0);
-  dl(csv,`plotedge_${ts()}.csv`,'text/csv');
-  document.getElementById('exportStatus').textContent=`✓ CSV (${savedFeatures.length} features, ${total} rows)`;
-  showToast(`CSV downloaded (${total} rows)`);
-  markProjectExported();
+  const name=`plotedge_${ts()}.csv`;
+  // The success line is written by noteExportSaved() once the bytes are actually down, not
+  // guessed here — this used to claim "✓ CSV" even when nothing had been written.
+  saveExportFile(csv,name,'text/csv').then(res=>{
+    if(noteExportSaved(res,name)){
+      const status=document.getElementById('exportStatus');
+      if(status) status.textContent += ` — ${savedFeatures.length} features, ${total} rows`;
+      markProjectExported();
+    }
+  });
 }
 
 
-function exportPhotos(){
+async function exportPhotos(){
   const all=savedFeatures.flatMap(f=>{
     const info=resolveFeatureType(f);
     const base=(f.featureTypeId?info.label:f.layer)||'feature';
     return (f.vertices||[]).flatMap((v,vi)=>(v.photos||[]).map((p,pi)=>({dataUrl:p.dataUrl,name:`${base.replace(/\s+/g,'_')}_${f.name.replace(/\s+/g,'_')}_v${vi+1}_photo${pi+1}${p.angleLabel?('_'+p.angleLabel.replace(/\s+/g,'_')):''}.jpg`})));
   });
   if(!all.length){showToast('No photos to export');return;}
-  let i=0;
-  const next=()=>{
-    if(i>=all.length){document.getElementById('exportStatus').textContent=`✓ ${all.length} photo${all.length>1?'s':''} downloaded`;showToast(`${all.length} photo${all.length>1?'s':''} downloaded`);markProjectExported();return;}
-    const ph=all[i++]; const a=document.createElement('a'); a.href=ph.dataUrl; a.download=ph.name; a.click();
-    setTimeout(next,700);
-  };
-  next();
-  if(all.length>1) document.getElementById('exportStatus').textContent=`Downloading ${all.length} photos…`;
+  const status=document.getElementById('exportStatus');
+  if(status) status.textContent=`Saving ${all.length} photo${all.length>1?'s':''}…`;
+  let written=0, lastRes=null;
+  for(const ph of all){
+    // A data: URI is not a file. Anchor-clicking one wrote nothing in the WebView, exactly like
+    // the other exports — fetch the bytes back out and put them through the same writer.
+    let blob;
+    try { blob = await (await fetch(ph.dataUrl)).blob(); }
+    catch(e) { continue; }
+    const res = await saveExportFile(blob, ph.name, 'image/jpeg');
+    if(res.ok){ written++; lastRes=res; }
+    if(!res.native) await new Promise(r=>setTimeout(r,700));
+  }
+  if(!written){ noteExportSaved({ok:false},'photos'); return; }
+  const where = lastRes ? lastRes.where.replace(/\/[^/]*$/,'') : 'this device';
+  if(status) status.textContent=`✓ ${written} photo${written>1?'s':''} saved to ${where}`;
+  showToast(`${written} photo${written>1?'s':''} saved to ${where}`);
+  markProjectExported();
 }
 
 
@@ -267,9 +454,10 @@ function exportAllProjects(){
     return;
   }
 
-  zip.generateAsync({type:'blob'}).then(blob=>{
-    const a=Object.assign(document.createElement('a'),{href:URL.createObjectURL(blob), download:`PlotEdge_AllProjects_${stamp}.zip`});
-    a.click(); URL.revokeObjectURL(a.href);
+  zip.generateAsync({type:'blob'}).then(async blob=>{
+    const name=`PlotEdge_AllProjects_${stamp}.zip`;
+    const res=await saveExportFile(blob,name,'application/zip');
+    if(!noteExportSaved(res,name)){ setBusy(false); return; }
     showToast(`✓ ${projectsWithData} project${projectsWithData>1?'s':''} zipped`);
     const stamp2 = new Date().toISOString();
     exportedProjectIds.forEach(id=>{ const p2=projects.find(x=>x.id===id); if (p2) p2.lastExportedAt = stamp2; });
@@ -687,9 +875,7 @@ async function exportGeoPackage(){
 
     const bytes=db.export();
     db.close();
-    dl(bytes,`plotedge_${ts()}.gpkg`,'application/geopackage+sqlite3');
-    document.getElementById('exportStatus').textContent=`✓ GeoPackage (${groups.length} layer${groups.length>1?'s':''})`;
-    showToast('GeoPackage downloaded');
+    await dl(bytes,`plotedge_${ts()}.gpkg`,'application/geopackage+sqlite3');
   }catch(err){
     console.error(err);
     document.getElementById('exportStatus').textContent='GeoPackage export failed';
@@ -712,8 +898,7 @@ async function exportFlatGeobuf(){
     const stamp=ts(); let i=0;
     const next=()=>{
       if(i>=groups.length){
-        document.getElementById('exportStatus').textContent=`✓ ${groups.length} FlatGeobuf file${groups.length>1?'s':''} downloaded`;
-        showToast(`${groups.length} FlatGeobuf file${groups.length>1?'s':''} downloaded`);
+        showToast(`${groups.length} FlatGeobuf file${groups.length>1?'s':''} saved`);
         btn.disabled=false; updateExportFormatUI();
         return;
       }
@@ -752,8 +937,7 @@ async function exportGeoParquet(){
     const stamp=ts(); let i=0;
     const next=()=>{
       if(i>=groups.length){
-        document.getElementById('exportStatus').textContent=`✓ ${groups.length} GeoParquet file${groups.length>1?'s':''} downloaded`;
-        showToast(`${groups.length} GeoParquet file${groups.length>1?'s':''} downloaded`);
+        showToast(`${groups.length} GeoParquet file${groups.length>1?'s':''} saved`);
         markProjectExported();
         btn.disabled=false; updateExportFormatUI();
         return;
@@ -863,9 +1047,7 @@ async function exportExcel(){
     const ws=XLSX.utils.aoa_to_sheet(rows);
     XLSX.utils.book_append_sheet(wb,ws,'Features');
     const bytes=XLSX.write(wb,{bookType:'xlsx',type:'array'});
-    dl(bytes,`plotedge_${ts()}.xlsx`,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    document.getElementById('exportStatus').textContent=`✓ Excel workbook (${savedFeatures.length} features)`;
-    showToast('Excel workbook downloaded');
+    await dl(bytes,`plotedge_${ts()}.xlsx`,'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     markProjectExported();
   }catch(err){
     console.error(err);
@@ -919,10 +1101,15 @@ async function exportPDF(){
       headStyles:{fillColor:[4,120,87],textColor:255},
       margin:{left:24,right:24}, theme:'grid'
     });
-    doc.save(`plotedge_${ts()}.pdf`);
-    document.getElementById('exportStatus').textContent=`✓ PDF report (${savedFeatures.length} features)`;
-    showToast('PDF downloaded');
-    markProjectExported();
+    // doc.save() is jsPDF's own <a download> and is just as inert inside the WebView as the one
+    // this file used to use. Take the bytes and write them ourselves.
+    const pdfName=`plotedge_${ts()}.pdf`;
+    const pdfRes=await saveExportFile(doc.output('blob'), pdfName, 'application/pdf');
+    if(noteExportSaved(pdfRes,pdfName)){
+      const st=document.getElementById('exportStatus');
+      if(st) st.textContent += ` — ${savedFeatures.length} features`;
+      markProjectExported();
+    }
   }catch(err){
     console.error(err);
     document.getElementById('exportStatus').textContent='PDF export failed';
@@ -1172,10 +1359,9 @@ async function exportMapLayout(){
       margin,pageH-16
     );
 
-    doc.save(`plotedge_layout_${ts()}.pdf`);
-    document.getElementById('exportStatus').textContent='✓ Map layout PDF';
-    showToast('Map layout downloaded');
-    markProjectExported();
+    const layoutName=`plotedge_layout_${ts()}.pdf`;
+    const layoutRes=await saveExportFile(doc.output('blob'), layoutName, 'application/pdf');
+    if(noteExportSaved(layoutRes,layoutName)) markProjectExported();
   }catch(err){
     console.error(err);
     document.getElementById('exportStatus').textContent='Map layout export failed';
@@ -1238,7 +1424,6 @@ function exportProjectBackup(){
   };
   dl(JSON.stringify(payload), sanitizeFileSegment(p.name||'Project') + '_backup_' + ts() + '.plotedge.json', 'application/json');
   markProjectExported();
-  showToast('✓ Backup downloaded — importable back into PlotEdge');
 }
 
 // ── Export: a specific project from the Project Manager menu, whether or not it's the one
@@ -1429,7 +1614,7 @@ const EXPORT_FORMATS = {
     desc:'A single-page <code>.pdf</code> plan sheet: every point/line/polygon plotted to scale, with a legend, north arrow, and scale bar.',
     note:'First tap loads a small PDF engine from a CDN (needs network signal once). This is a schematic plan (exact coordinates, plain background) rather than a raster satellite/street basemap — so it works fully offline with no map-tile downloads.' },
   photos: { label:'Download Photos', btnClass:'btn-photos', run:exportPhotos,
-    desc:'Downloads each photo named <code>Layer_FeatureName_photo1.jpg</code>. Chrome downloads one at a time.', note:null }
+    desc:'Saves each photo as <code>Layer_FeatureName_photo1.jpg</code> into your exports folder.', note:null }
 };
 
 // ── Map Layout basemap mode ── 'none' | 'street' | 'satellite', remembered across sessions the
