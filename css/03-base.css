@@ -546,7 +546,8 @@
   .empty-projects strong { display:block; color:var(--white); font-size:15px; margin-bottom:5px; font-weight:700; }
 
   /* #projectsList on the Welcome screen (see renderProjectsList()): hidden entirely when there's
-     nothing to show, otherwise a stack of .project-row cards ahead of New/Template/Restore. */
+     nothing to show, otherwise a stack of .project-row cards below New/Template/Restore. */
+  .projects-list-label { font-size:12px; font-weight:700; letter-spacing:0.02em; text-transform:uppercase; color:var(--text-tertiary); margin:20px 2px 8px; }
   .projects-list { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .projects-list .project-row { border-radius:var(--rl); }
 
