@@ -76,14 +76,38 @@ function parseStore(raw) {
 }
 
 
-// Total captured features across every project — the figure the write guard
-// compares before and after, so "this save loses work" is a measurable claim
-// rather than a guess.
+// ══ WHAT THE GUARD COUNTS, AND WHY IT IS *NOT* VERTICES ══
+// This used to be `savedFeatures.length + currentVertices.length`, which made
+// the guard fire on the single most common action in the app.
+//
+// currentVertices is a SCRATCHPAD. Finishing a polygon moves five vertices out
+// of it and into one saved feature, so that sum goes 0+5=5 -> 1+0=1. The guard
+// read the drop as "this save would drop 4 captured items", refused the write,
+// and left the feature in memory but not on disk. The screen said saved; the
+// next launch said nothing was ever captured. Clearing the form, cancelling an
+// edit and finishing a line all tripped the same wire.
+//
+// The durable unit of work is a SAVED FEATURE. It only ever goes down when the
+// user deletes something, and every one of those paths already passes
+// {destructive:true}. Counting features (never scratch vertices) makes the
+// guard fire exactly when data is genuinely about to vanish and never when the
+// user completes the thing they came here to do.
 function countFeatures(data) {
   let n = 0;
   for (const k in (data || {})) {
     const d = data[k] || {};
-    n += (d.savedFeatures || []).length + (d.currentVertices || []).length;
+    n += (d.savedFeatures || []).length;
+  }
+  return n;
+}
+
+// In-progress vertices, reported for diagnostics only — deliberately kept out
+// of the verdict above. See the comment there.
+function countDraftVertices(data) {
+  let n = 0;
+  for (const k in (data || {})) {
+    const d = data[k] || {};
+    n += (d.currentVertices || []).length;
   }
   return n;
 }
@@ -240,10 +264,11 @@ function storeWriteVerdict(next, opts) {
   const nextShape = storeShape(next);
   if (prev.projectCount && !nextShape.projectCount)
     return { ok:false, why:'it would remove all ' + prev.projectCount + ' project(s)' };
-  // A tolerance of zero is correct here: an ordinary edit never reduces the
-  // total, and a single-item delete goes through the destructive path.
+  // A tolerance of zero is correct here: saving, editing and capturing all
+  // leave the saved-feature count the same or higher, and every real deletion
+  // goes through the destructive path.
   if (prev.itemCount > nextShape.itemCount)
-    return { ok:false, why:'it would drop ' + (prev.itemCount - nextShape.itemCount) + ' captured item(s)' };
+    return { ok:false, why:'it would drop ' + (prev.itemCount - nextShape.itemCount) + ' saved feature(s)' };
   return { ok:true };
 }
 
