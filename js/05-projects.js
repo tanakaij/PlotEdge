@@ -922,17 +922,17 @@ function exportProjectZip(id){
     activeProjectId = saved.activeProjectId;
   }
 
-  zip.generateAsync({ type:'blob' }).then(blob=>{
-    const a = Object.assign(document.createElement('a'), {
-      href: URL.createObjectURL(blob),
-      download: folderName + '_' + ts() + '.zip'
-    });
-    a.click(); URL.revokeObjectURL(a.href);
+  zip.generateAsync({ type:'blob' }).then(async blob=>{
+    // saveExportFile() lives in js/17-export.js, which loads after this file — that is fine, it is
+    // only reached when the user taps Export, long after every script has run.
+    const name = folderName + '_' + ts() + '.zip';
+    const res = await saveExportFile(blob, name, 'application/zip');
+    if (!res.ok){ showToast('Could not write "' + name + '" to this device. Check storage permission and free space.'); return; }
     p.lastExportedAt = new Date().toISOString();
     persistStore();
     refreshProjectsScreen();
     if (activeProjectId === p.id) refreshExportMeta();
-    showToast('✓ "' + p.name + '" exported');
+    showToast('✓ "' + p.name + '" saved to ' + res.where);
   }).catch(()=>{ showToast('Could not build the zip. Try again.'); });
 }
 
