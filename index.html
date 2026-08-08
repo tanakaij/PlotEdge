@@ -222,9 +222,17 @@ try {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
-    <!-- The empty #projectsList that used to sit here is gone. This screen only renders when
-         projects.length === 0, so that container could never hold anything — it was a permanently
-         empty list under a "Projects" label. The real list lives on the Project Manager. -->
+    <!-- ══ PROJECTS LIST ══
+         showLanding()/renderLandingScreen() forces this screen open unconditionally (see the
+         comment above renderLandingScreen()) so the Home button always reaches New/Template/
+         Restore, even once projects exist. That's the one path onto #view-projects that isn't
+         gated on projects.length === 0 — every other route here (renderProjectsScreen,
+         refreshProjectsScreen, boot) only lands on this screen when the list truly is empty. This
+         container is what makes that path work: renderProjectsList() hides it entirely on a
+         genuine cold launch (nothing to show under the welcome copy) and fills it with the
+         project rows otherwise, so tapping Home with existing projects shows them instead of
+         landing on a screen with nowhere to put them. -->
+    <div id="projectsList" class="projects-list"></div>
     <button class="btn-pill" onclick="showNewProject()">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       New project
