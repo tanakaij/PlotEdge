@@ -38,7 +38,7 @@ if (!fs.existsSync(path.join(root, '.github/workflows/build-apk.yml'))) {
   console.log('packaging checks will be skipped. They run in CI, where it exists.');
 }
 
-const suites = ['split.test.js', 'integrity.test.js', 'store.test.js', 'photo.test.js', 'nav-build.test.js', 'theme.test.js', 'smoke.js'];
+const suites = ['split.test.js', 'integrity.test.js', 'store.test.js', 'collect.test.js', 'photo.test.js', 'nav-build.test.js', 'theme.test.js', 'smoke.js'];
 let total = 0, failed = 0;
 
 for (const s of suites) {
